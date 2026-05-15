@@ -11,6 +11,7 @@ use super::kanban::columns::*;
 use super::kanban::tasks::*;
 use super::logs::*;
 use super::middleware::auth_middleware;
+use super::models::*;
 use super::rules::*;
 
 pub fn create_router(pool: DbPool) -> Router {
@@ -74,6 +75,18 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/logs/{id}", get(log_get::get_log_entry))
         .route("/logs/stream", get(log_stream::stream_logs))
         .route("/logs/export", get(log_export::export_logs))
+        .route("/models/providers", get(provider_list::list_providers).post(provider_create::create_provider))
+        .route(
+            "/models/providers/{id}",
+            get(provider_get::get_provider)
+                .put(provider_update::update_provider)
+                .delete(provider_delete::delete_provider),
+        )
+        .route("/models/providers/{id}/models", post(model_create::add_model))
+        .route(
+            "/models/models/{id}",
+            put(model_update::update_model).delete(model_delete::delete_model),
+        )
         .layer(axum_mw::from_fn(auth_middleware));
 
     // WebSocket route (not under /api)

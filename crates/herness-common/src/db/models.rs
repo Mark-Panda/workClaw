@@ -149,6 +149,31 @@ pub struct KanbanTask {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct LlmProvider {
+    pub id: String,
+    pub name: String,
+    pub provider_type: String,
+    pub base_url: Option<String>,
+    pub api_key: String,
+    pub is_default: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct LlmModel {
+    pub id: String,
+    pub provider_id: String,
+    pub model_name: String,
+    pub display_name: Option<String>,
+    pub max_tokens: i64,
+    pub temperature: f64,
+    pub is_default: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
 pub struct LogEntry {
     pub id: String,
     pub level: String,

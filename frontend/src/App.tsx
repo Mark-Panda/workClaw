@@ -11,6 +11,7 @@ import RuleListPage from './pages/Rules/RuleListPage';
 import RuleEditorPage from './pages/Rules/RuleEditorPage';
 import KanbanBoardPage from './pages/Kanban/KanbanBoardPage';
 import LogsPage from './pages/Logs/LogsPage';
+import ModelManagementPage from './pages/Models/ModelManagementPage';
 
 export default function App() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
         <Route path="/kanban" element={<KanbanBoardPage />} />
         <Route path="/kanban/:boardId" element={<KanbanBoardPage />} />
         <Route path="/logs" element={<LogsPage />} />
+        <Route path="/models" element={<ModelManagementPage />} />
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
       </Route>
     </Routes>

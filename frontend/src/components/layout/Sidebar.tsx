@@ -6,6 +6,7 @@ const links = [
   { to: '/agents', label: 'Agents', icon: '▲' },
   { to: '/rules', label: 'Rules', icon: '◈' },
   { to: '/kanban', label: 'Kanban', icon: '▣' },
+  { to: '/models', label: 'Models', icon: '◆' },
   { to: '/logs', label: 'Logs', icon: '☰' },
 ];
 
