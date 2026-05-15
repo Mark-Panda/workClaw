@@ -1,15 +1,19 @@
-use crate::agent::subagent::{SubagentManager, SubagentConfig};
+use async_trait::async_trait;
+use crate::agent::subagent::{SubagentManager, SubagentConfig, ToolExecutor};
 use crate::agent::Agent;
 use crate::conversation::Conversation;
+use crate::mcp::client::{McpClient, McpClientConfig, McpManager};
 use crate::skill_runtime::registry::SkillRuntimeRegistry;
+use serde_json::Value;
 
-/// The Orchestrator ties together the agent, conversation, LLM provider, tools,
-/// skills, and subagents.
+/// The Orchestrator ties together the agent, conversation, LLM provider,
+/// MCP tools, skills, and subagents.
 pub struct Orchestrator {
     agent: Agent,
     conversation: Conversation,
     subagent_manager: SubagentManager,
     skill_registry: SkillRuntimeRegistry,
+    mcp_manager: McpManager,
 }
 
 impl Orchestrator {
@@ -19,6 +23,7 @@ impl Orchestrator {
             conversation,
             subagent_manager: SubagentManager::new(),
             skill_registry: SkillRuntimeRegistry::new(),
+            mcp_manager: McpManager::new(),
         }
     }
 
@@ -34,7 +39,6 @@ impl Orchestrator {
         &mut self.conversation
     }
 
-    /// Get the subagent manager for spawning and tracking subagents.
     pub fn subagent_manager(&self) -> &SubagentManager {
         &self.subagent_manager
     }
@@ -43,7 +47,6 @@ impl Orchestrator {
         &mut self.subagent_manager
     }
 
-    /// Get the skill registry.
     pub fn skill_registry(&self) -> &SkillRuntimeRegistry {
         &self.skill_registry
     }
@@ -52,10 +55,57 @@ impl Orchestrator {
         &mut self.skill_registry
     }
 
+    // ── MCP ─────────────────────────────────────────────────
+
+    pub fn mcp_manager(&self) -> &McpManager {
+        &self.mcp_manager
+    }
+
+    pub fn mcp_manager_mut(&mut self) -> &mut McpManager {
+        &mut self.mcp_manager
+    }
+
+    /// Add an MCP server configuration. Does not connect yet.
+    pub fn register_mcp_server(&mut self, config: McpClientConfig) {
+        self.mcp_manager.add_client(McpClient::new(config));
+    }
+
+    /// Connect all registered MCP servers and discover their tools.
+    pub async fn connect_mcp_servers(&mut self) -> Vec<anyhow::Result<()>> {
+        self.mcp_manager.connect_all().await
+    }
+
+    /// Collect all available tools from MCP servers and skills as
+    /// LLM-compatible tool definitions.
+    pub fn all_tools_as_llm(&self) -> Vec<Value> {
+        self.mcp_manager.all_tools_as_llm()
+    }
+
+    /// Execute a tool by name across connected MCP servers.
+    pub async fn execute_mcp_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> anyhow::Result<String> {
+        let response = self.mcp_manager.call_tool(tool_name, arguments).await?;
+        // Collect text content from the response
+        let text = response
+            .content
+            .iter()
+            .filter_map(|c| c.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Ok(text)
+    }
+
+    // ── Subagent ────────────────────────────────────────────
+
     /// Spawn a subagent with the given config.
     pub fn spawn_subagent(&mut self, config: SubagentConfig) -> &crate::agent::subagent::Subagent {
         self.subagent_manager.spawn(config)
     }
+
+    // ── System prompt ───────────────────────────────────────
 
     /// Build the full system prompt including skills context.
     pub fn build_system_prompt(&self) -> String {
@@ -66,6 +116,13 @@ impl Orchestrator {
         } else {
             format!("{}\n\n{}", base, skills_prompt)
         }
+    }
+}
+
+#[async_trait]
+impl ToolExecutor for Orchestrator {
+    async fn execute(&self, name: &str, arguments: Value) -> anyhow::Result<String> {
+        self.execute_mcp_tool(name, arguments).await
     }
 }
 

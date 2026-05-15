@@ -1,6 +1,11 @@
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+use crate::llm::chat::{ChatCompletionRequest, ChatMessage};
+use crate::llm::provider::LlmProvider;
 
 /// Configuration for a subagent.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -128,6 +133,8 @@ pub struct Subagent {
 pub struct SubagentMessage {
     pub role: String,
     pub content: String,
+    /// Tool call ID for tool result messages
+    pub tool_call_id: Option<String>,
 }
 
 impl SubagentMessage {
@@ -135,6 +142,7 @@ impl SubagentMessage {
         Self {
             role: "user".into(),
             content: content.into(),
+            tool_call_id: None,
         }
     }
 
@@ -142,6 +150,7 @@ impl SubagentMessage {
         Self {
             role: "assistant".into(),
             content: content.into(),
+            tool_call_id: None,
         }
     }
 
@@ -149,8 +158,25 @@ impl SubagentMessage {
         Self {
             role: "system".into(),
             content: content.into(),
+            tool_call_id: None,
         }
     }
+
+    pub fn tool(tool_call_id: impl Into<String>, content: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: content.into(),
+            tool_call_id: Some(tool_call_id.into()),
+        }
+    }
+}
+
+/// Trait for executing tools within a subagent's execution loop.
+/// Implemented by the orchestrator or tool host.
+#[async_trait]
+pub trait ToolExecutor: Send + Sync {
+    /// Execute a tool and return the result as a string.
+    async fn execute(&self, name: &str, arguments: Value) -> anyhow::Result<String>;
 }
 
 impl Subagent {
@@ -250,6 +276,118 @@ impl Subagent {
             *self.turn_count.lock().await >= max
         } else {
             false
+        }
+    }
+
+    /// Run the subagent's execution loop: interact with the LLM, handle
+    /// tool calls, enforce turn limits, and return a final result.
+    pub async fn run(
+        &mut self,
+        provider: &dyn LlmProvider,
+        tools: &[Value],
+        executor: &dyn ToolExecutor,
+    ) -> SubagentResult {
+        if let Err(e) = self.start().await {
+            return SubagentResult::failure(&self.config.name, e);
+        }
+
+        let model = self
+            .config
+            .model
+            .clone()
+            .unwrap_or_else(|| "claude-sonnet-4-6".into());
+
+        loop {
+            if self.is_over_max_turns().await {
+                let conv = self.conversation().await;
+                let output = conv
+                    .iter()
+                    .filter(|m| m.role == "assistant")
+                    .map(|m| m.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let turns = self.turn_count().await;
+                let _ = self.complete().await;
+                return SubagentResult::success(&self.config.name, output, turns);
+            }
+
+            let turn = self.increment_turn().await;
+
+            // Build request messages: system prompt + conversation history
+            let mut messages = vec![ChatMessage::system(self.build_system_prompt())];
+            for msg in self.conversation().await.iter() {
+                match msg.role.as_str() {
+                    "system" => messages.push(ChatMessage::system(&msg.content)),
+                    "assistant" => messages.push(ChatMessage::assistant(&msg.content)),
+                    "tool" => messages.push(ChatMessage::tool(
+                        msg.tool_call_id.clone().unwrap_or_default(),
+                        &msg.content,
+                    )),
+                    _ => messages.push(ChatMessage::user(&msg.content)),
+                }
+            }
+
+            let request = ChatCompletionRequest {
+                model: model.clone(),
+                messages,
+                temperature: self.config.temperature,
+                max_tokens: self.config.max_tokens,
+                tools: if tools.is_empty() { None } else { Some(tools.to_vec()) },
+            };
+
+            let response = match provider.chat(request).await {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = self
+                        .fail(format!("LLM call failed on turn {}: {}", turn, e))
+                        .await;
+                    return SubagentResult::failure(&self.config.name, format!("LLM error: {}", e));
+                }
+            };
+
+            // If the model called tools, execute each and add results
+            if !response.tool_calls.is_empty() {
+                // Record the assistant message with text and tool calls
+                let calls_for_msg: Vec<crate::llm::chat::ToolCall> =
+                    response.tool_calls.clone();
+                self.add_message(SubagentMessage {
+                    role: "assistant".into(),
+                    content: response.text,
+                    tool_call_id: None,
+                })
+                .await;
+
+                for tc in &calls_for_msg {
+                    match executor
+                        .execute(&tc.name, serde_json::from_str(&tc.arguments).unwrap_or_default())
+                        .await
+                    {
+                        Ok(result) => {
+                            self.add_message(SubagentMessage::tool(&tc.id, result))
+                                .await;
+                        }
+                        Err(e) => {
+                            self.add_message(SubagentMessage::tool(
+                                &tc.id,
+                                format!("Error: {}", e),
+                            ))
+                            .await;
+                        }
+                    }
+                }
+                // Continue the loop — model may respond to tool results
+                continue;
+            }
+
+            // No tool calls — the response is the final answer
+            self.add_message(SubagentMessage::assistant(response.text.clone()))
+                .await;
+            let _ = self.complete().await;
+            return SubagentResult::success(
+                &self.config.name,
+                response.text,
+                self.turn_count().await,
+            );
         }
     }
 

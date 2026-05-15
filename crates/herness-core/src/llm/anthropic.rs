@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use claude_api::messages::content::ContentBlock;
 use claude_api::messages::content::KnownBlock;
+use claude_api::messages::content::ToolResultContent;
 use claude_api::messages::input::MessageContent;
 use claude_api::messages::stream::ContentDelta;
 use claude_api::messages::stream::KnownContentDelta;
@@ -17,7 +18,8 @@ use super::chat::ChatCompletionRequest;
 use super::chat::ChatMessage;
 use super::chat::ContentPart;
 use super::chat::MessageContent as OurMC;
-use super::provider::LlmProvider;
+use super::chat::ToolCall;
+use super::provider::{ChatResponse, LlmProvider};
 use super::streaming::StreamEvent;
 
 // ── Conversion helpers ────────────────────────────────────
@@ -69,12 +71,22 @@ fn build_request(request: &ChatCompletionRequest) -> anyhow::Result<CreateMessag
 
     // The Anthropic API uses a dedicated system field rather than a
     // "system" role in the message list.  Separate them out.
+    // Tool results become tool_result blocks within a user turn.
     let mut system_texts = Vec::new();
     for msg in &request.messages {
         match msg.role.as_str() {
             "system" => system_texts.push(msg.text_content()),
             "user" => builder = builder.user(convert_content(msg)),
             "assistant" => builder = builder.assistant(convert_content(msg)),
+            "tool" => {
+                let block = ContentBlock::Known(KnownBlock::ToolResult {
+                    tool_use_id: msg.tool_call_id.clone().unwrap_or_default(),
+                    content: ToolResultContent::Text(msg.text_content()),
+                    is_error: None,
+                    cache_control: None,
+                });
+                builder = builder.user(MessageContent::from(vec![block]));
+            }
             _ => builder = builder.user(convert_content(msg)),
         }
     }
@@ -112,34 +124,45 @@ impl AnthropicProvider {
         }
     }
 
-    pub fn with_base_url(mut self, base_url: String) -> Self {
+    pub fn with_base_url(mut self, base_url: String) -> anyhow::Result<Self> {
         self.base_url = base_url.clone();
         self.client = ClaudeClient::builder()
             .api_key(&self.api_key)
             .base_url(base_url)
-            .build()
-            .expect("building Claude client with custom base URL should succeed");
-        self
+            .build()?;
+        Ok(self)
     }
 }
 
 #[async_trait]
 impl LlmProvider for AnthropicProvider {
-    async fn chat(&self, request: ChatCompletionRequest) -> anyhow::Result<String> {
+    async fn chat(&self, request: ChatCompletionRequest) -> anyhow::Result<ChatResponse> {
         let req = build_request(&request)?;
         let response = self.client.messages().create(req).await?;
 
-        let text = response
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                ContentBlock::Known(KnownBlock::Text { text, .. }) => Some(text.as_str()),
-                _ => None,
-            })
-            .collect::<Vec<_>>()
-            .join("");
+        let mut text_parts = Vec::new();
+        let mut tool_calls = Vec::new();
 
-        Ok(text)
+        for block in &response.content {
+            match block {
+                ContentBlock::Known(KnownBlock::Text { text, .. }) => {
+                    text_parts.push(text.as_str());
+                }
+                ContentBlock::Known(KnownBlock::ToolUse { id, name, input, .. }) => {
+                    tool_calls.push(ToolCall {
+                        id: id.clone(),
+                        name: name.clone(),
+                        arguments: input.to_string(),
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ChatResponse {
+            text: text_parts.join(""),
+            tool_calls,
+        })
     }
 
     async fn chat_stream(
@@ -154,8 +177,10 @@ impl LlmProvider for AnthropicProvider {
         let (tx, rx) = tokio::sync::mpsc::channel::<anyhow::Result<StreamEvent>>(64);
 
         tokio::spawn(async move {
-            let mut pending_tool_id: Option<String> = None;
-            let mut pending_tool_name: Option<String> = None;
+            // Map content block index -> (tool_use_id, tool_name)
+            // for correctly routing InputJsonDelta events in concurrent tool calls.
+            let mut pending_tools: std::collections::HashMap<u32, (String, String)> =
+                std::collections::HashMap::new();
 
             while let Some(event) = stream.next().await {
                 match event {
@@ -163,7 +188,9 @@ impl LlmProvider for AnthropicProvider {
                         claude_api::messages::stream::StreamEvent::Known(known) => {
                             match known {
                                 KnownStreamEvent::ContentBlockStart {
-                                    content_block, ..
+                                    index,
+                                    content_block,
+                                    ..
                                 } => {
                                     if let ContentBlock::Known(KnownBlock::ToolUse {
                                         id,
@@ -171,8 +198,8 @@ impl LlmProvider for AnthropicProvider {
                                         ..
                                     }) = content_block
                                     {
-                                        pending_tool_id = Some(id.clone());
-                                        pending_tool_name = Some(name.clone());
+                                        pending_tools
+                                            .insert(index, (id.clone(), name.clone()));
                                         if tx
                                             .send(Ok(StreamEvent::ToolCall {
                                                 id,
@@ -186,7 +213,9 @@ impl LlmProvider for AnthropicProvider {
                                         }
                                     }
                                 }
-                                KnownStreamEvent::ContentBlockDelta { delta, .. } => match delta {
+                                KnownStreamEvent::ContentBlockDelta {
+                                    index, delta, ..
+                                } => match delta {
                                     ContentDelta::Known(KnownContentDelta::TextDelta {
                                         text,
                                     }) => {
@@ -206,14 +235,14 @@ impl LlmProvider for AnthropicProvider {
                                             partial_json,
                                         },
                                     ) => {
+                                        let (tool_id, tool_name) = pending_tools
+                                            .get(&index)
+                                            .cloned()
+                                            .unwrap_or_default();
                                         if tx
                                             .send(Ok(StreamEvent::ToolCall {
-                                                id: pending_tool_id
-                                                    .clone()
-                                                    .unwrap_or_default(),
-                                                name: pending_tool_name
-                                                    .clone()
-                                                    .unwrap_or_default(),
+                                                id: tool_id,
+                                                name: tool_name,
                                                 arguments: partial_json,
                                             }))
                                             .await

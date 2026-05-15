@@ -1,6 +1,8 @@
-use super::protocol::ToolDef;
+use super::protocol::{CallToolResponse, ToolDef};
+use super::runtime;
 use super::transport::{StdioTransportConfig, TransportType};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// Configuration for connecting to an MCP server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -105,6 +107,26 @@ impl McpClient {
         self.tools = tools;
     }
 
+    /// Connect to the MCP server over stdio, perform the handshake, and
+    /// discover tools.
+    pub async fn connect(&mut self) -> anyhow::Result<()> {
+        let conn = runtime::connect_stdio(&self.config).await?;
+        self.mark_connected(conn.server_name, conn.server_version, conn.tools);
+        Ok(())
+    }
+
+    /// Call a tool on the MCP server. The server must be connected first.
+    pub async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> anyhow::Result<CallToolResponse> {
+        if !self.connected {
+            anyhow::bail!("MCP client is not connected");
+        }
+        runtime::call_tool_stdio(&self.config, tool_name, arguments).await
+    }
+
     /// Mark the client as disconnected
     pub fn mark_disconnected(&mut self) {
         self.connected = false;
@@ -205,6 +227,32 @@ impl McpManager {
             .iter()
             .flat_map(|c| c.tools_as_llm_tools())
             .collect()
+    }
+
+    /// Connect all configured but not-yet-connected clients.
+    pub async fn connect_all(&mut self) -> Vec<anyhow::Result<()>> {
+        let mut results = Vec::new();
+        for client in &mut self.clients {
+            if !client.is_connected() {
+                results.push(client.connect().await);
+            }
+        }
+        results
+    }
+
+    /// Call a tool by name across all connected clients.
+    /// Returns the first successful result or the last error.
+    pub async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: Value,
+    ) -> anyhow::Result<CallToolResponse> {
+        for client in &self.clients {
+            if client.is_connected() && client.get_tool(tool_name).is_some() {
+                return client.call_tool(tool_name, arguments.clone()).await;
+            }
+        }
+        anyhow::bail!("No connected MCP server has tool '{}'", tool_name)
     }
 }
 

@@ -10,9 +10,22 @@ pub struct ChatCompletionRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: MessageContent,
+    /// Tool call ID — set when role is "tool"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
+    /// Tool calls made by the assistant — only populated in assistant messages
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Vec<ToolCall>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +73,8 @@ impl ChatMessage {
         Self {
             role: "user".into(),
             content: MessageContent::Text(text.into()),
+            tool_call_id: None,
+            tool_calls: None,
         }
     }
 
@@ -67,6 +82,18 @@ impl ChatMessage {
         Self {
             role: "assistant".into(),
             content: MessageContent::Text(text.into()),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    /// Create an assistant message that includes tool calls.
+    pub fn assistant_with_tool_calls(text: impl Into<String>, calls: Vec<ToolCall>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: MessageContent::Text(text.into()),
+            tool_call_id: None,
+            tool_calls: Some(calls),
         }
     }
 
@@ -74,6 +101,18 @@ impl ChatMessage {
         Self {
             role: "system".into(),
             content: MessageContent::Text(text.into()),
+            tool_call_id: None,
+            tool_calls: None,
+        }
+    }
+
+    /// Create a tool result message (for tool call results in conversation).
+    pub fn tool(tool_call_id: impl Into<String>, result: impl Into<String>) -> Self {
+        Self {
+            role: "tool".into(),
+            content: MessageContent::Text(result.into()),
+            tool_call_id: Some(tool_call_id.into()),
+            tool_calls: None,
         }
     }
 
@@ -92,6 +131,8 @@ impl ChatMessage {
                     },
                 },
             ]),
+            tool_call_id: None,
+            tool_calls: None,
         }
     }
 
@@ -115,6 +156,8 @@ impl ChatMessage {
                     },
                 },
             ]),
+            tool_call_id: None,
+            tool_calls: None,
         }
     }
 

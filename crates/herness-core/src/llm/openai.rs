@@ -2,7 +2,8 @@ use async_openai::types::chat::{
     ChatCompletionRequestAssistantMessage, ChatCompletionRequestAssistantMessageContent,
     ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
     ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
-    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestUserMessage,
+    ChatCompletionRequestSystemMessageContent, ChatCompletionRequestToolMessage,
+    ChatCompletionRequestToolMessageContent, ChatCompletionRequestUserMessage,
     ChatCompletionRequestUserMessageContent, ChatCompletionRequestUserMessageContentPart,
     ChatCompletionTool, ChatCompletionTools, CreateChatCompletionRequestArgs,
     CreateChatCompletionStreamResponse, FinishReason, FunctionObject, ImageDetail, ImageUrl,
@@ -13,8 +14,8 @@ use futures::stream::Stream;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
-use super::chat::{ChatCompletionRequest, ChatMessage, ContentPart, MessageContent};
-use super::provider::LlmProvider;
+use super::chat::{ChatCompletionRequest, ChatMessage, ContentPart, MessageContent, ToolCall};
+use super::provider::{ChatResponse, LlmProvider};
 use super::streaming::StreamEvent;
 
 // ── Conversion helpers ────────────────────────────────────
@@ -99,6 +100,10 @@ fn convert_message(msg: &ChatMessage) -> ChatCompletionRequestMessage {
                 function_call: None,
             },
         ),
+        "tool" => ChatCompletionRequestMessage::Tool(ChatCompletionRequestToolMessage {
+            content: ChatCompletionRequestToolMessageContent::Text(msg.text_content()),
+            tool_call_id: msg.tool_call_id.clone().unwrap_or_default(),
+        }),
         _ => ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
             content: ChatCompletionRequestUserMessageContent::Text(msg.text_content()),
             name: None,
@@ -153,48 +158,48 @@ impl Stream for OpenAiStreamWrapper {
             return Poll::Ready(None);
         }
 
-        match self.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(chunk))) => {
-                if let Some(choice) = chunk.choices.first() {
-                    // Check for tool calls
-                    if let Some(tool_calls) = &choice.delta.tool_calls {
-                        for tc in tool_calls {
-                            if let Some(func) = &tc.function {
-                                return Poll::Ready(Some(Ok(StreamEvent::ToolCall {
-                                    id: tc.id.clone().unwrap_or_default(),
-                                    name: func.name.clone().unwrap_or_default(),
-                                    arguments: func.arguments.clone().unwrap_or_default(),
+        loop {
+            match self.inner.as_mut().poll_next(cx) {
+                Poll::Ready(Some(Ok(chunk))) => {
+                    if let Some(choice) = chunk.choices.first() {
+                        if let Some(tool_calls) = &choice.delta.tool_calls {
+                            for tc in tool_calls {
+                                if let Some(func) = &tc.function {
+                                    return Poll::Ready(Some(Ok(StreamEvent::ToolCall {
+                                        id: tc.id.clone().unwrap_or_default(),
+                                        name: func.name.clone().unwrap_or_default(),
+                                        arguments: func.arguments.clone().unwrap_or_default(),
+                                    })));
+                                }
+                            }
+                        }
+
+                        if let Some(reason) = &choice.finish_reason {
+                            self.done = true;
+                            return Poll::Ready(Some(Ok(StreamEvent::Done {
+                                finish_reason: Some(finish_reason_to_str(reason)),
+                            })));
+                        }
+
+                        if let Some(content) = &choice.delta.content {
+                            if !content.is_empty() {
+                                return Poll::Ready(Some(Ok(StreamEvent::Text {
+                                    content: content.clone(),
                                 })));
                             }
                         }
                     }
-
-                    // Check for finish reason
-                    if let Some(reason) = &choice.finish_reason {
-                        self.done = true;
-                        return Poll::Ready(Some(Ok(StreamEvent::Done {
-                            finish_reason: Some(finish_reason_to_str(reason)),
-                        })));
-                    }
-
-                    // Content delta
-                    if let Some(content) = &choice.delta.content {
-                        if !content.is_empty() {
-                            return Poll::Ready(Some(Ok(StreamEvent::Text {
-                                content: content.clone(),
-                            })));
-                        }
-                    }
+                    // Empty chunk — loop again to poll for more data
                 }
-                // Skip empty chunks, continue polling
-                cx.waker().wake_by_ref();
-                Poll::Pending
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(anyhow::anyhow!(
+                        "OpenAI stream error: {}",
+                        e
+                    ))))
+                }
+                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Pending => return Poll::Pending,
             }
-            Poll::Ready(Some(Err(e))) => {
-                Poll::Ready(Some(Err(anyhow::anyhow!("OpenAI stream error: {}", e))))
-            }
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
         }
     }
 }
@@ -238,7 +243,7 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
-    async fn chat(&self, request: ChatCompletionRequest) -> anyhow::Result<String> {
+    async fn chat(&self, request: ChatCompletionRequest) -> anyhow::Result<ChatResponse> {
         let messages: Vec<ChatCompletionRequestMessage> =
             request.messages.iter().map(convert_message).collect();
 
@@ -257,13 +262,29 @@ impl LlmProvider for OpenAiProvider {
         let req = req_args.build()?;
         let response = self.client.chat().create(req).await?;
 
-        let content = response
-            .choices
-            .first()
+        let choice = response.choices.into_iter().next();
+        let text = choice
+            .as_ref()
             .and_then(|c| c.message.content.clone())
             .unwrap_or_default();
 
-        Ok(content)
+        let tool_calls: Vec<ToolCall> = choice
+            .and_then(|c| c.message.tool_calls)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|tc| match tc {
+                async_openai::types::chat::ChatCompletionMessageToolCalls::Function(f) => {
+                    Some(ToolCall {
+                        id: f.id,
+                        name: f.function.name,
+                        arguments: f.function.arguments,
+                    })
+                }
+                _ => None,
+            })
+            .collect();
+
+        Ok(ChatResponse { text, tool_calls })
     }
 
     async fn chat_stream(

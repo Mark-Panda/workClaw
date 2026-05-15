@@ -13,6 +13,4 @@ pub enum StreamEvent {
     },
     #[serde(rename = "done")]
     Done { finish_reason: Option<String> },
-    #[serde(rename = "error")]
-    Error { message: String },
 }
