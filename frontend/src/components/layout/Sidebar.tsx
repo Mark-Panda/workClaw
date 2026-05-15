@@ -1,13 +1,13 @@
 import { NavLink } from 'react-router-dom';
 
 const links = [
-  { to: '/dashboard', label: 'Dashboard', icon: '◻' },
-  { to: '/chat', label: 'Chat', icon: '◉' },
-  { to: '/agents', label: 'Agents', icon: '▲' },
-  { to: '/rules', label: 'Rules', icon: '◈' },
-  { to: '/kanban', label: 'Kanban', icon: '▣' },
-  { to: '/models', label: 'Models', icon: '◆' },
-  { to: '/logs', label: 'Logs', icon: '☰' },
+  { to: '/dashboard', label: '仪表盘', icon: '◻' },
+  { to: '/chat', label: '对话', icon: '◉' },
+  { to: '/agents', label: '智能体', icon: '▲' },
+  { to: '/rules', label: '规则', icon: '◈' },
+  { to: '/kanban', label: '看板', icon: '▣' },
+  { to: '/models', label: '模型管理', icon: '◆' },
+  { to: '/logs', label: '日志', icon: '☰' },
 ];
 
 export default function Sidebar() {

@@ -22,7 +22,7 @@ export default function LoginPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-              Username
+              用户名
             </label>
             <input
               id="username"
@@ -35,7 +35,7 @@ export default function LoginPage() {
           </div>
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-              Password
+              密码
             </label>
             <input
               id="password"
@@ -47,13 +47,13 @@ export default function LoginPage() {
             />
           </div>
           <Button type="submit" className="w-full">
-            Sign In
+            登录
           </Button>
         </form>
         <p className="text-center text-sm text-gray-600 mt-4">
-          Don't have an account?{' '}
+          还没有账号？{' '}
           <Link to="/register" className="text-primary-600 hover:underline">
-            Sign up
+            注册
           </Link>
         </p>
       </div>

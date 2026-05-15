@@ -8,15 +8,15 @@ export default function AgentListPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Agents</h1>
+        <h1 className="text-2xl font-bold">智能体</h1>
         <Link to="/agents/new">
-          <Button>New Agent</Button>
+          <Button>新建智能体</Button>
         </Link>
       </div>
 
       {agents.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
-          No agents yet. Create your first agent to get started.
+          暂无智能体，请点击上方按钮创建。
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -38,7 +38,7 @@ export default function AgentListPage() {
                 <p className="text-sm text-gray-500 line-clamp-2">{agent.description}</p>
               )}
               <p className="text-xs text-gray-400 mt-2">
-                Model: {agent.config?.model ?? 'N/A'}
+                模型: {agent.config?.model ?? '未设置'}
               </p>
             </Link>
           ))}

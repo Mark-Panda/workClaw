@@ -33,18 +33,15 @@ export default function ModelManagementPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // Provider modal
   const [providerModal, setProviderModal] = useState(false);
   const [editingProvider, setEditingProvider] = useState<LlmProvider | null>(null);
   const [providerForm, setProviderForm] = useState<CreateProviderRequest>({ ...EMPTY_PROVIDER });
 
-  // Model modal
   const [modelModal, setModelModal] = useState(false);
   const [modelProviderId, setModelProviderId] = useState('');
   const [editingModel, setEditingModel] = useState<LlmModel | null>(null);
   const [modelForm, setModelForm] = useState<AddModelRequest>({ ...EMPTY_MODEL });
 
-  // Delete confirm
   const [deleteTarget, setDeleteTarget] = useState<
     { kind: 'provider'; id: string; name: string } | { kind: 'model'; id: string; name: string } | null
   >(null);
@@ -80,7 +77,6 @@ export default function ModelManagementPage() {
     }
   };
 
-  // Provider CRUD
   const openNewProvider = () => {
     setEditingProvider(null);
     setProviderForm({ ...EMPTY_PROVIDER });
@@ -135,7 +131,6 @@ export default function ModelManagementPage() {
     setDeleteTarget(null);
   };
 
-  // Model CRUD
   const openNewModel = (providerId: string) => {
     setEditingModel(null);
     setModelProviderId(providerId);
@@ -181,15 +176,15 @@ export default function ModelManagementPage() {
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold">Models</h1>
-        <Button onClick={openNewProvider}>New Provider</Button>
+        <h1 className="text-2xl font-bold">模型管理</h1>
+        <Button onClick={openNewProvider}>新增 Provider</Button>
       </div>
 
       {loading ? (
-        <div className="text-center text-gray-400 py-12">Loading...</div>
+        <div className="text-center text-gray-400 py-12">加载中...</div>
       ) : providers.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
-          No LLM providers configured. Add one to get started.
+          尚未配置 LLM Provider，请点击上方按钮添加。
         </div>
       ) : (
         <div className="space-y-3">
@@ -211,12 +206,12 @@ export default function ModelManagementPage() {
                       </span>
                       {p.is_default && (
                         <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">
-                          default
+                          默认
                         </span>
                       )}
                     </div>
                     <p className="text-xs text-gray-400 mt-0.5">
-                      {p.base_url ? p.base_url : 'default endpoint'} · {p.model_count ?? 0} models
+                      {p.base_url ? p.base_url : '默认端点'} · {p.model_count ?? 0} 个模型
                     </p>
                   </div>
                 </button>
@@ -225,7 +220,7 @@ export default function ModelManagementPage() {
                     className="text-xs text-gray-400 hover:text-primary-600 px-2 py-1"
                     onClick={() => openEditProvider(p)}
                   >
-                    Edit
+                    编辑
                   </button>
                   <button
                     className="text-xs text-gray-400 hover:text-red-600 px-2 py-1"
@@ -233,7 +228,7 @@ export default function ModelManagementPage() {
                       setDeleteTarget({ kind: 'provider', id: p.id, name: p.name })
                     }
                   >
-                    Delete
+                    删除
                   </button>
                 </div>
               </div>
@@ -241,12 +236,12 @@ export default function ModelManagementPage() {
               {expandedId === p.id && (
                 <div className="mt-4 pt-3 border-t border-gray-100">
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm font-medium text-gray-700">Models</span>
-                    <Button onClick={() => openNewModel(p.id)}>Add Model</Button>
+                    <span className="text-sm font-medium text-gray-700">模型列表</span>
+                    <Button onClick={() => openNewModel(p.id)}>添加模型</Button>
                   </div>
                   {!p.models || p.models.length === 0 ? (
                     <p className="text-sm text-gray-400 text-center py-4">
-                      No models under this provider.
+                      该 Provider 下暂无模型。
                     </p>
                   ) : (
                     <div className="space-y-2">
@@ -265,12 +260,12 @@ export default function ModelManagementPage() {
                               )}
                               {m.is_default && (
                                 <span className="text-xs px-1.5 py-0.5 rounded bg-green-100 text-green-700">
-                                  default
+                                  默认
                                 </span>
                               )}
                             </div>
                             <p className="text-xs text-gray-400 mt-0.5">
-                              max_tokens: {m.max_tokens} · temperature: {m.temperature}
+                              最大 Token: {m.max_tokens} · 温度: {m.temperature}
                             </p>
                           </div>
                           <div className="flex items-center gap-1">
@@ -278,7 +273,7 @@ export default function ModelManagementPage() {
                               className="text-xs text-gray-400 hover:text-primary-600 px-2 py-1"
                               onClick={() => openEditModel(p.id, m)}
                             >
-                              Edit
+                              编辑
                             </button>
                             <button
                               className="text-xs text-gray-400 hover:text-red-600 px-2 py-1"
@@ -290,7 +285,7 @@ export default function ModelManagementPage() {
                                 })
                               }
                             >
-                              Delete
+                              删除
                             </button>
                           </div>
                         </div>
@@ -304,26 +299,26 @@ export default function ModelManagementPage() {
         </div>
       )}
 
-      {/* Provider Modal */}
+      {/* Provider 弹窗 */}
       <Modal
         open={providerModal}
         onClose={() => setProviderModal(false)}
-        title={editingProvider ? 'Edit Provider' : 'New Provider'}
+        title={editingProvider ? '编辑 Provider' : '新增 Provider'}
       >
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
             <input
               className="input-field"
               value={providerForm.name}
               onChange={(e) =>
                 setProviderForm({ ...providerForm, name: e.target.value })
               }
-              placeholder="e.g., Anthropic, OpenAI"
+              placeholder="例如：Anthropic、OpenAI"
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Type</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">类型</label>
             <select
               className="input-field"
               value={providerForm.provider_type}
@@ -337,7 +332,7 @@ export default function ModelManagementPage() {
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Base URL <span className="text-gray-400 font-normal">(optional)</span>
+              接口地址 <span className="text-gray-400 font-normal">(可选)</span>
             </label>
             <input
               className="input-field"
@@ -345,7 +340,7 @@ export default function ModelManagementPage() {
               onChange={(e) =>
                 setProviderForm({ ...providerForm, base_url: e.target.value || undefined })
               }
-              placeholder="Use default endpoint"
+              placeholder="留空使用默认端点"
             />
           </div>
           <div>
@@ -368,36 +363,36 @@ export default function ModelManagementPage() {
                 setProviderForm({ ...providerForm, is_default: e.target.checked })
               }
             />
-            Set as default provider
+            设为默认 Provider
           </label>
           <div className="flex justify-end gap-2 pt-2">
-            <Button onClick={() => setProviderModal(false)}>Cancel</Button>
-            <Button onClick={saveProvider}>Save</Button>
+            <Button onClick={() => setProviderModal(false)}>取消</Button>
+            <Button onClick={saveProvider}>保存</Button>
           </div>
         </div>
       </Modal>
 
-      {/* Model Modal */}
+      {/* 模型弹窗 */}
       <Modal
         open={modelModal}
         onClose={() => setModelModal(false)}
-        title={editingModel ? 'Edit Model' : 'Add Model'}
+        title={editingModel ? '编辑模型' : '添加模型'}
       >
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Model Name</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">模型名称</label>
             <input
               className="input-field"
               value={modelForm.model_name}
               onChange={(e) =>
                 setModelForm({ ...modelForm, model_name: e.target.value })
               }
-              placeholder="e.g., claude-sonnet-4-6, gpt-4o"
+              placeholder="例如：claude-sonnet-4-6、gpt-4o"
             />
           </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Display Name <span className="text-gray-400 font-normal">(optional)</span>
+              显示名称 <span className="text-gray-400 font-normal">(可选)</span>
             </label>
             <input
               className="input-field"
@@ -405,12 +400,12 @@ export default function ModelManagementPage() {
               onChange={(e) =>
                 setModelForm({ ...modelForm, display_name: e.target.value || undefined })
               }
-              placeholder="Friendly name"
+              placeholder="便于识别的别名"
             />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Max Tokens</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">最大 Token</label>
               <input
                 className="input-field"
                 type="number"
@@ -421,7 +416,7 @@ export default function ModelManagementPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Temperature</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">温度</label>
               <input
                 className="input-field"
                 type="number"
@@ -443,22 +438,23 @@ export default function ModelManagementPage() {
                 setModelForm({ ...modelForm, is_default: e.target.checked })
               }
             />
-            Set as default model for this provider
+            设为该 Provider 默认模型
           </label>
           <div className="flex justify-end gap-2 pt-2">
-            <Button onClick={() => setModelModal(false)}>Cancel</Button>
-            <Button onClick={saveModel}>Save</Button>
+            <Button onClick={() => setModelModal(false)}>取消</Button>
+            <Button onClick={saveModel}>保存</Button>
           </div>
         </div>
       </Modal>
 
-      {/* Delete Confirm */}
+      {/* 删除确认 */}
       <ConfirmDialog
         open={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}
         onConfirm={confirmDelete}
-        title={`Delete ${deleteTarget?.kind === 'provider' ? 'Provider' : 'Model'}`}
-        message={`Are you sure you want to delete "${deleteTarget?.name}"? This cannot be undone.`}
+        title={deleteTarget?.kind === 'provider' ? '删除 Provider' : '删除模型'}
+        message={`确定要删除「${deleteTarget?.name}」吗？此操作不可撤销。`}
+        confirmLabel="删除"
       />
     </div>
   );

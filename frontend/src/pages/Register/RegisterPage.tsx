@@ -15,18 +15,18 @@ export default function RegisterPage() {
     setError('');
 
     if (!username.trim()) {
-      setError('Username is required.');
+      setError('用户名不能为空');
       return;
     }
     if (password.length < 6) {
-      setError('Password must be at least 6 characters.');
+      setError('密码至少需要 6 位字符');
       return;
     }
 
     try {
       await register({ username, email, password });
     } catch {
-      setError('Registration failed. Username may already be taken.');
+      setError('注册失败，用户名可能已被占用');
     }
   };
 
@@ -44,7 +44,7 @@ export default function RegisterPage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-              Username
+              用户名
             </label>
             <input
               id="username"
@@ -57,7 +57,7 @@ export default function RegisterPage() {
           </div>
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
-              Email
+              邮箱
             </label>
             <input
               id="email"
@@ -70,7 +70,7 @@ export default function RegisterPage() {
           </div>
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
-              Password
+              密码
             </label>
             <input
               id="password"
@@ -83,13 +83,13 @@ export default function RegisterPage() {
             />
           </div>
           <Button type="submit" className="w-full">
-            Sign Up
+            注册
           </Button>
         </form>
         <p className="text-center text-sm text-gray-600 mt-4">
-          Already have an account?{' '}
+          已有账号？{' '}
           <Link to="/login" className="text-primary-600 hover:underline">
-            Sign in
+            登录
           </Link>
         </p>
       </div>
