@@ -76,7 +76,12 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/logs/export", get(log_export::export_logs))
         .layer(axum_mw::from_fn(auth_middleware));
 
+    // WebSocket route (not under /api)
+    let ws_router = Router::new()
+        .route("/ws/chat", get(crate::ws::handler::chat_ws_handler));
+
     Router::new()
+        .merge(ws_router)
         .nest("/api", Router::new().merge(health).merge(auth).merge(api))
         .with_state(pool)
 }

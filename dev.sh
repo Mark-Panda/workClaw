@@ -2,6 +2,7 @@
 set -e
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BIN="$ROOT_DIR/target/debug/herness-server"
 
 # Prepare .env if not exists
 if [ ! -f "$ROOT_DIR/.env" ]; then
@@ -14,8 +15,13 @@ set -a
 source "$ROOT_DIR/.env"
 set +a
 
-# Use absolute path for SQLite database
-export DATABASE_URL="sqlite:${ROOT_DIR}/herness.db"
+DB_PATH="${ROOT_DIR}/herness.db"
+export DATABASE_URL="sqlite:${DB_PATH}"
+
+# Ensure database file exists (SQLite needs the file to exist before opening)
+if [ ! -f "$DB_PATH" ]; then
+    touch "$DB_PATH"
+fi
 
 cleanup() {
     echo ""
@@ -26,9 +32,15 @@ cleanup() {
 }
 trap cleanup SIGINT SIGTERM
 
-# Start backend
-echo "Starting backend (cargo run -p herness-server)..."
-(cd "$ROOT_DIR" && cargo run -p herness-server) &
+# Build backend (binary at target/debug/herness-server)
+echo "Building backend..."
+(cd "$ROOT_DIR" && cargo build -p herness-server) &
+BUILD_PID=$!
+wait "$BUILD_PID"
+
+# Start backend (run binary directly, no cargo lock needed)
+echo "Starting backend ($BIN)..."
+"$BIN" &
 BACKEND_PID=$!
 
 # Start frontend
