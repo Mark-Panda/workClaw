@@ -1,0 +1,18 @@
+架构设计
+后端语言rust 使用workspace机制
+前端语言react
+
+实现内容
+1. herness工程的agent实现，支持SKILL  MCP subagent 等
+2. Agent管理 规则引擎管理 日志管理 看板任务管理  chat流式对话界面等
+3. 无状态规则引擎的实现 DSL使用JSON，考虑AOP 分布式部署 组件设计  可拓展可插拔 可以参考 https://github.com/Mark-Panda/rule-rs 的部分实现
+4. 规则引擎画布的实现 使用 https://flowgram.ai/examples/fixed-layout/fixed-feature-overview.md
+5. 前后端分离实现
+6. Docker部署
+7. 前后端代码实现都要实现test测试
+8. UI自动化测试
+
+herness工程的实现多参考开源项目补充不足
+
+
+整体实现使用 superpowers + openspec

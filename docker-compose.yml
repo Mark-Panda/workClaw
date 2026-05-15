@@ -1,0 +1,32 @@
+version: "3.9"
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      - DATABASE_URL=sqlite:/data/herness.db
+      - RUST_LOG=info
+    volumes:
+      - herness_data:/data
+      - ./skills:/skills:ro
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    profiles:
+      - production
+
+volumes:
+  herness_data:

@@ -1,0 +1,27 @@
+[package]
+name = "herness-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+herness-common = { path = "../herness-common" }
+herness-core = { path = "../herness-core" }
+herness-rule = { path = "../herness-rule" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+jsonwebtoken = { workspace = true }
+argon2 = { workspace = true }
+futures = { workspace = true }
+sqlx = { workspace = true }
+tokio-stream = { workspace = true }

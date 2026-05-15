@@ -1,0 +1,115 @@
+use axum::middleware as axum_mw;
+use axum::routing::{get, post, put};
+use axum::Router;
+use herness_common::db::pool::DbPool;
+
+use super::agents::*;
+use super::auth::*;
+use super::chat::*;
+use super::kanban::boards::*;
+use super::kanban::columns::*;
+use super::kanban::tasks::*;
+use super::logs::*;
+use super::middleware::auth_middleware;
+use super::rules::*;
+
+pub fn create_router(pool: DbPool) -> Router {
+    // Health check
+    let health = Router::new().route("/health", get(|| async { "OK" }));
+
+    // Auth routes (no middleware)
+    let auth = Router::new()
+        .route("/register", post(register::register))
+        .route("/login", post(login::login));
+
+    // Protected API routes
+    let api = Router::new()
+        .route("/agents", get(agent_list::list_agents).post(agent_create::create_agent))
+        .route(
+            "/agents/{id}",
+            get(agent_get::get_agent)
+                .put(agent_update::update_agent)
+                .delete(agent_delete::delete_agent),
+        )
+        .route("/agents/{id}/start", post(agent_start::start_agent))
+        .route("/agents/{id}/stop", post(agent_stop::stop_agent))
+        .route("/rules", get(rule_list::list_rules).post(rule_create::create_rule))
+        .route(
+            "/rules/{id}",
+            get(rule_get::get_rule)
+                .put(rule_update::update_rule)
+                .delete(rule_delete::delete_rule),
+        )
+        .route("/rules/{id}/execute", post(rule_execute::execute_rule))
+        .route("/rules/validate", post(rule_validate::validate_rule))
+        .route("/rules/{id}/export", get(rule_export::export_rule))
+        .route("/rules/import", post(rule_import::import_rule))
+        .route("/chat/send", post(chat_send::send_message))
+        .route("/chat/conversations", get(chat_history::list_conversations))
+        .route(
+            "/chat/conversations/{id}",
+            get(chat_history::get_conversation).delete(chat_history::delete_conversation),
+        )
+        .route("/kanban/boards", get(board_list::list_boards).post(board_create::create_board))
+        .route(
+            "/kanban/boards/{id}",
+            get(board_get::get_board)
+                .put(board_update::update_board)
+                .delete(board_delete::delete_board),
+        )
+        .route("/kanban/boards/{id}/columns", post(column_create::create_column))
+        .route(
+            "/kanban/columns/{id}",
+            put(column_update::update_column).delete(column_delete::delete_column),
+        )
+        .route("/kanban/columns/{id}/tasks", get(task_list::list_tasks).post(task_create::create_task))
+        .route(
+            "/kanban/tasks/{id}",
+            get(task_get::get_task)
+                .put(task_update::update_task)
+                .delete(task_delete::delete_task),
+        )
+        .route("/kanban/tasks/{id}/move", axum::routing::patch(task_move::move_task))
+        .route("/logs", get(log_list::list_logs))
+        .route("/logs/{id}", get(log_get::get_log_entry))
+        .route("/logs/stream", get(log_stream::stream_logs))
+        .route("/logs/export", get(log_export::export_logs))
+        .layer(axum_mw::from_fn(auth_middleware));
+
+    Router::new()
+        .nest("/api", Router::new().merge(health).merge(auth).merge(api))
+        .with_state(pool)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{Request, StatusCode};
+    use herness_common::db::pool::init_db;
+    use tower::ServiceExt;
+
+    async fn test_pool() -> DbPool {
+        init_db("sqlite::memory:")
+            .await
+            .expect("Failed to create test database")
+    }
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let pool = test_pool().await;
+        let app = create_router(pool);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+}

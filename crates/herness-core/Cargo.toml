@@ -1,0 +1,22 @@
+[package]
+name = "herness-core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+herness-common = { path = "../herness-common" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+dashmap = { workspace = true }
+rmcp = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+tokio-stream = { workspace = true }
+serde_yaml = { workspace = true }
+async-openai = { workspace = true }
+claude-api = { workspace = true }
