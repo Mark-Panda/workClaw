@@ -5,6 +5,7 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    dotenvy::dotenv().ok();
     tracing_subscriber::fmt::init();
 
     let config = ServerConfig::from_env();
