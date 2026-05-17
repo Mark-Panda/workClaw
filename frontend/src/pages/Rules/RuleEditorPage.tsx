@@ -4,7 +4,9 @@ import Button from '../../components/common/Button';
 import { createRule, updateRule, getRule } from '../../api/rules';
 import { useRuleValidation } from '../../hooks/useRuleValidation';
 import { FlowEditor, InterceptorsPanel, createDefaultDsl } from './FlowEditor';
+import { NodeSelectionContext } from './FlowEditor/nodeSelection';
 import type { RuleChainDsl, InterceptorConfig } from '../../types/rule';
+import type { SelectedNodeInfo } from './FlowEditor/nodeSelection';
 
 const DEFAULT_DSL_JSON = JSON.stringify(createDefaultDsl(), null, 2);
 
@@ -12,6 +14,7 @@ export default function RuleEditorPage() {
   const { id } = useParams();
   const navigate = useNavigate();
   const isNew = !id || id === 'new';
+  const [selectedNode, setSelectedNode] = useState<SelectedNodeInfo | null>(null);
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -209,6 +212,7 @@ export default function RuleEditorPage() {
       </div>
 
       {/* Editor area */}
+      <NodeSelectionContext.Provider value={{ selectedNode, setSelectedNode }}>
       <div className="flex-1 min-h-0 flex gap-3">
         {/* Canvas (always mounts FlowEditor; internal view mode toggling) */}
         <div className="flex-1 min-w-0 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
@@ -229,6 +233,7 @@ export default function RuleEditorPage() {
           </div>
         )}
       </div>
+      </NodeSelectionContext.Provider>
     </div>
   );
 }

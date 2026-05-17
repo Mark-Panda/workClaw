@@ -4,7 +4,6 @@ import {
   EditorRenderer,
   usePlaygroundTools,
   usePlayground,
-  useRefresh,
   type FixedLayoutPluginContext,
   type FlowNodeJSON,
   type FlowNodeType,
@@ -20,6 +19,8 @@ import { NotifyContext } from './context';
 import NodeAdder from './NodeAdder';
 import DefaultRuleNode from './DefaultRuleNode';
 import CustomCollapse from './Collapse';
+import NodeConfigPanel from './NodeConfigPanel';
+import { NodeSelectionContext } from './nodeSelection';
 
 /** Walk FlowGram's tree and collect all real (non-branch) node IDs. */
 function collectCanvasNodeIds(nodes: FlowNodeJSON[]): Set<string> {
@@ -191,8 +192,13 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
           canDrop: () => true,
         }}
       >
-        <EditorRenderer />
-        {!readonly && <EditorToolbar viewMode={viewMode} onViewModeSwitch={onViewModeSwitch} />}
+        <div className="flex h-full w-full">
+          <div className="flex-1 min-w-0 relative">
+            <EditorRenderer />
+            {!readonly && <EditorToolbar viewMode={viewMode} onViewModeSwitch={onViewModeSwitch} />}
+          </div>
+          <NodeConfigPanel />
+        </div>
       </FixedLayoutEditorProvider>
     </div>
     </NotifyContext.Provider>
@@ -210,7 +216,6 @@ function EditorToolbar({
   const { zoomin, zoomout, fitView, undo, redo, canUndo, canRedo, zoom, changeLayout, isVertical } =
     usePlaygroundTools();
   const playground = usePlayground();
-  const refresh = useRefresh();
   const readonly = playground.config.readonly;
 
   const btn = (title: string, onClick: () => void, disabled = false, label: string) => (
