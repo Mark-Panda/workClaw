@@ -44,11 +44,51 @@ export function dslToFlowDocument(dsl: RuleChainDsl): FlowDocumentJSON {
     if (flowNode) flowNodes.push(flowNode);
   }
 
-  // Add any unvisited nodes in DSL order (preserves linear chain sequence)
-  for (const node of dsl.nodes) {
-    if (!visited.has(node.id)) {
-      const flowNode = walkDslNode(node.id, nodeMap, adjacency, visited);
-      if (flowNode) flowNodes.push(flowNode);
+  // Process remaining unvisited nodes in topological (chain) order,
+  // not DSL node-list order.  This ensures the flow-child chain of a
+  // container (e.g. loop → script → end) appears in the correct sequence
+  // regardless of where 'end' is positioned in the nodes array.
+  {
+    const unvisitedIds = new Set(
+      dsl.nodes.filter((n) => !visited.has(n.id)).map((n) => n.id),
+    );
+
+    if (unvisitedIds.size > 0) {
+      // Build the subgraph of edges between UNVISITED nodes
+      const fwd = new Map<string, string[]>();
+      const rev = new Map<string, string[]>();
+      for (const e of dsl.edges) {
+        if (unvisitedIds.has(e.from) && unvisitedIds.has(e.to)) {
+          const list = fwd.get(e.from) ?? [];
+          list.push(e.to);
+          fwd.set(e.from, list);
+          const revList = rev.get(e.to) ?? [];
+          revList.push(e.from);
+          rev.set(e.to, revList);
+        }
+      }
+
+      // Entry points: unvisited nodes with no incoming edges from other
+      // unvisited nodes
+      const entries = [...unvisitedIds].filter((id) => !rev.has(id));
+      const queue = [...entries];
+
+      while (queue.length > 0) {
+        const id = queue.shift()!;
+        if (!unvisitedIds.has(id)) continue;
+        unvisitedIds.delete(id);
+        const flowNode = walkDslNode(id, nodeMap, adjacency, visited);
+        if (flowNode) flowNodes.push(flowNode);
+        for (const next of fwd.get(id) ?? []) {
+          if (unvisitedIds.has(next)) queue.push(next);
+        }
+      }
+
+      // Any remaining isolated nodes (not reachable via BFS)
+      for (const id of unvisitedIds) {
+        const flowNode = walkDslNode(id, nodeMap, adjacency, visited);
+        if (flowNode) flowNodes.push(flowNode);
+      }
     }
   }
 
@@ -128,16 +168,21 @@ function walkDslNode(
   if (isContainer) {
     const childSet = new Set(children);
 
-    // Find the flow child: one that has outgoing edges to nodes OUTSIDE
-    // this container's direct children.  The remaining children are body
-    // children that should be placed inside the container's blocks.
+    // Determine which child continues the main flow vs. body children
+    // (inside the container).  Priority order:
+    //   1. 'end'-type nodes are always flow children (terminal in chain)
+    //   2. A child whose outgoing edges reach nodes OUTSIDE the container's
+    //      children set (excluding back-edge to the container itself)
+    //   3. Fallback: the FIRST child (main flow typically appears first in
+    //      the edge order from notifyChange → flowDocumentToDsl)
     const flowChildIdx = children.findIndex((childId) => {
+      const childDslNode = nodeMap.get(childId);
+      if (childDslNode && childDslNode.type === 'end') return true;
       const out = adjacency.get(childId) ?? [];
       return out.some((t) => !childSet.has(t) && t !== nodeId);
     });
 
-    // Fallback: treat the LAST child as the flow child.
-    const flowIdx = flowChildIdx >= 0 ? flowChildIdx : children.length - 1;
+    const flowIdx = flowChildIdx >= 0 ? flowChildIdx : 0;
 
     const bodyChildren = children.filter((_, i) => i !== flowIdx);
 
@@ -267,13 +312,41 @@ export function flowDocumentToDsl(
     walk(rootNode, '__root__');
   }
 
+  // Build a quick type lookup for edge generation below
+  const nodeTypeMap = new Map(nodes.map((n) => [n.id, n.type]));
+
   // Generate edges between consecutive nodes within each group.
   // Branch groups also get an owner→first-child edge.
+  // Skip edges from 'end' nodes — end is terminal and should never have outgoing edges.
+  // Skip direct fork→join edges — fork connects to its branches via owner→first-child
+  // and branches connect to join via cross-group edges (restored by edge preservation).
+  //
+  // CRITICAL: when 'end' appears BETWEEN two non-end nodes in a group
+  // (e.g. [loop, end, subchain]), the node after end would be orphaned
+  // because end→next is skipped.  In this case we connect:
+  //   prev → next (skip end)
+  //   next → end
+  // This handles FlowGram internal reordering where 'end' gets placed
+  // before a newly-added node that logically comes before end.
   for (const ids of groups.values()) {
     for (let i = 0; i < ids.length; i++) {
-      if (i < ids.length - 1) {
-        edges.push({ from: ids[i], to: ids[i + 1] });
+      if (i >= ids.length - 1) break;
+      const a = ids[i];
+      const b = ids[i + 1];
+      if (nodeTypeMap.get(a) === 'end') continue;
+      // Skip fork→join
+      if (nodeTypeMap.get(a) === 'fork' && nodeTypeMap.get(b) === 'join') continue;
+      // If b is 'end' and there are more nodes after b, wire around it
+      if (nodeTypeMap.get(b) === 'end' && i + 2 < ids.length) {
+        const c = ids[i + 2];
+        if (nodeTypeMap.get(c) !== 'end') {
+          edges.push({ from: a, to: c });
+          edges.push({ from: c, to: b });
+          i++; // consume 'end'; next iteration starts at c
+          continue;
+        }
       }
+      edges.push({ from: a, to: b });
     }
   }
 
