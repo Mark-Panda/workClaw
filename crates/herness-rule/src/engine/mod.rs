@@ -42,6 +42,14 @@ impl RuleEngine {
         self.chain_cache.remove(chain_id);
     }
 
+    pub fn node_registry(&self) -> &Arc<NodeRegistry> {
+        &self.node_registry
+    }
+
+    pub fn interceptor_registry(&self) -> &Arc<InterceptorRegistry> {
+        &self.interceptor_registry
+    }
+
     pub async fn execute(
         &self,
         chain_id: &str,
@@ -62,9 +70,9 @@ impl RuleEngine {
 
         loop {
             // Run before-interceptors
-            for interceptor in &interceptors {
+            for (interceptor, config) in &interceptors {
                 interceptor
-                    .before(&mut ctx, &current.id)
+                    .before(&mut ctx, &current.id, config)
                     .await
                     .map_err(|e| AppError::RuleExecution(format!("Interceptor before error: {}", e)))?;
             }
@@ -84,9 +92,9 @@ impl RuleEngine {
             match result {
                 Ok(output) => {
                     // Run after-interceptors
-                    for interceptor in &interceptors {
+                    for (interceptor, config) in &interceptors {
                         let _ = interceptor
-                            .after(&mut ctx, &current.id, &output)
+                            .after(&mut ctx, &current.id, &output, config)
                             .await;
                     }
 
@@ -107,9 +115,9 @@ impl RuleEngine {
                 }
                 Err(e) => {
                     // Run error-interceptors
-                    for interceptor in &interceptors {
+                    for (interceptor, config) in &interceptors {
                         let _ = interceptor
-                            .on_error(&mut ctx, &current.id, &e)
+                            .on_error(&mut ctx, &current.id, &e, config)
                             .await;
                     }
                     return Err(AppError::RuleExecution(format!(

@@ -7,6 +7,8 @@ const links = [
   { to: '/rules', label: '规则', icon: '◈' },
   { to: '/kanban', label: '看板', icon: '▣' },
   { to: '/models', label: '模型管理', icon: '◆' },
+  { to: '/skills', label: '技能管理', icon: '◇' },
+  { to: '/mcp-servers', label: 'MCP管理', icon: '⬡' },
   { to: '/logs', label: '日志', icon: '☰' },
 ];
 

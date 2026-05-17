@@ -1,4 +1,5 @@
 export interface AgentConfig {
+  provider_id?: string;
   model: string;
   systemPrompt: string;
   temperature: number;

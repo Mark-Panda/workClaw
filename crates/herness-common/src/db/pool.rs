@@ -17,5 +17,9 @@ pub async fn init_db(database_url: &str) -> sqlx::Result<DbPool> {
         .execute(&pool)
         .await?;
 
+    sqlx::query(include_str!("migrations/003_global_mcp.sql"))
+        .execute(&pool)
+        .await?;
+
     Ok(pool)
 }

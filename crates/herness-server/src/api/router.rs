@@ -1,7 +1,10 @@
+use axum::extract::FromRef;
 use axum::middleware as axum_mw;
-use axum::routing::{get, post, put};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
 use herness_common::db::pool::DbPool;
+use herness_rule::engine::RuleEngine;
+use std::sync::Arc;
 
 use super::agents::*;
 use super::auth::*;
@@ -10,11 +13,25 @@ use super::kanban::boards::*;
 use super::kanban::columns::*;
 use super::kanban::tasks::*;
 use super::logs::*;
+use super::mcp_servers::*;
 use super::middleware::auth_middleware;
 use super::models::*;
 use super::rules::*;
+use super::skills::*;
 
-pub fn create_router(pool: DbPool) -> Router {
+#[derive(Clone)]
+pub struct AppState {
+    pub pool: DbPool,
+    pub rule_engine: Arc<RuleEngine>,
+}
+
+impl FromRef<AppState> for DbPool {
+    fn from_ref(state: &AppState) -> Self {
+        state.pool.clone()
+    }
+}
+
+pub fn create_router(state: AppState) -> Router {
     // Health check
     let health = Router::new().route("/health", get(|| async { "OK" }));
 
@@ -34,6 +51,19 @@ pub fn create_router(pool: DbPool) -> Router {
         )
         .route("/agents/{id}/start", post(agent_start::start_agent))
         .route("/agents/{id}/stop", post(agent_stop::stop_agent))
+        .route("/skills", get(list_skills).post(upload_skill))
+        .route("/skills/{name}", delete(delete_skill))
+        .route("/skills/{name}/content", get(get_skill_content))
+        .route(
+            "/mcp-servers",
+            get(list_mcp_servers).post(create_mcp_server),
+        )
+        .route(
+            "/mcp-servers/{id}",
+            get(get_mcp_server)
+                .put(update_mcp_server)
+                .delete(delete_mcp_server),
+        )
         .route("/rules", get(rule_list::list_rules).post(rule_create::create_rule))
         .route(
             "/rules/{id}",
@@ -96,7 +126,7 @@ pub fn create_router(pool: DbPool) -> Router {
     Router::new()
         .merge(ws_router)
         .nest("/api", Router::new().merge(health).merge(auth).merge(api))
-        .with_state(pool)
+        .with_state(state)
 }
 
 #[cfg(test)]
@@ -105,18 +135,27 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use herness_common::db::pool::init_db;
+    use herness_rule::interceptor::InterceptorRegistry;
+    use herness_rule::node::registry::NodeRegistry;
     use tower::ServiceExt;
 
-    async fn test_pool() -> DbPool {
-        init_db("sqlite::memory:")
+    async fn test_state() -> AppState {
+        let pool = init_db("sqlite::memory:")
             .await
-            .expect("Failed to create test database")
+            .expect("Failed to create test database");
+
+        let node_registry = Arc::new(NodeRegistry::new());
+        let interceptor_registry = Arc::new(InterceptorRegistry::new());
+
+        let rule_engine = Arc::new(RuleEngine::new(node_registry, interceptor_registry));
+
+        AppState { pool, rule_engine }
     }
 
     #[tokio::test]
     async fn test_health_check() {
-        let pool = test_pool().await;
-        let app = create_router(pool);
+        let state = test_state().await;
+        let app = create_router(state);
 
         let response = app
             .oneshot(

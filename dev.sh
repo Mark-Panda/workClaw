@@ -17,6 +17,8 @@ set +a
 
 DB_PATH="${ROOT_DIR}/herness.db"
 export DATABASE_URL="sqlite:${DB_PATH}"
+export CONFIG_PATH="${ROOT_DIR}/config.toml"
+export SKILLS_DIR="${SKILLS_DIR:-${ROOT_DIR}/skills}"
 
 # Ensure database file exists (SQLite needs the file to exist before opening)
 if [ ! -f "$DB_PATH" ]; then

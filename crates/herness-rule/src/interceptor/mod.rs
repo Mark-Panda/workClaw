@@ -8,6 +8,7 @@ use crate::dsl::types::InterceptorConfig;
 use crate::engine::context::ExecutionContext;
 use crate::node::traits::NodeOutput;
 use herness_common::error::{AppError, AppResult};
+use serde_json::Value;
 
 #[async_trait]
 pub trait Interceptor: Send + Sync {
@@ -17,6 +18,7 @@ pub trait Interceptor: Send + Sync {
         &self,
         _ctx: &mut ExecutionContext,
         _node_id: &str,
+        _config: &Value,
     ) -> AppResult<()> {
         Ok(())
     }
@@ -26,6 +28,7 @@ pub trait Interceptor: Send + Sync {
         _ctx: &mut ExecutionContext,
         _node_id: &str,
         _result: &NodeOutput,
+        _config: &Value,
     ) -> AppResult<()> {
         Ok(())
     }
@@ -35,6 +38,7 @@ pub trait Interceptor: Send + Sync {
         _ctx: &mut ExecutionContext,
         _node_id: &str,
         _error: &AppError,
+        _config: &Value,
     ) -> AppResult<()> {
         Ok(())
     }
@@ -60,15 +64,24 @@ impl InterceptorRegistry {
     pub fn get_enabled_interceptors(
         &self,
         configs: &[InterceptorConfig],
-    ) -> Vec<Arc<dyn Interceptor>> {
+    ) -> Vec<(Arc<dyn Interceptor>, Value)> {
         configs
             .iter()
-            .filter_map(|cfg| self.interceptors.get(&cfg.interceptor_type).cloned())
+            .filter_map(|cfg| {
+                self.interceptors
+                    .get(&cfg.interceptor_type)
+                    .cloned()
+                    .map(|interceptor| (interceptor, cfg.config.clone()))
+            })
             .collect()
     }
 
     pub fn list_types(&self) -> Vec<&str> {
         self.interceptors.keys().map(|k| k.as_str()).collect()
+    }
+
+    pub fn contains(&self, interceptor_type: &str) -> bool {
+        self.interceptors.contains_key(interceptor_type)
     }
 }
 

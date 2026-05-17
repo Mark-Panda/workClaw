@@ -16,7 +16,7 @@ export interface InterceptorConfig {
 }
 
 export interface RuleChainDsl {
-  chainId: string;
+  chain_id: string;
   version: string;
   nodes: RuleNode[];
   edges: RuleEdge[];
@@ -28,9 +28,9 @@ export interface RuleChain {
   name: string;
   description?: string;
   dsl: RuleChainDsl;
-  canvasState?: unknown;
+  canvas_state?: unknown;
   version: number;
   status: 'draft' | 'active' | 'archived';
-  createdAt: string;
-  updatedAt: string;
+  created_at: string;
+  updated_at: string;
 }

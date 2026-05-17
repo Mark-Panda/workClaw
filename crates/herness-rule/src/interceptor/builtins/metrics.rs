@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::interceptor::Interceptor;
@@ -42,6 +43,7 @@ impl Interceptor for MetricsInterceptor {
         _ctx: &mut crate::engine::context::ExecutionContext,
         _node_id: &str,
         _result: &crate::node::traits::NodeOutput,
+        _config: &Value,
     ) -> herness_common::error::AppResult<()> {
         self.node_executions.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -52,6 +54,7 @@ impl Interceptor for MetricsInterceptor {
         _ctx: &mut crate::engine::context::ExecutionContext,
         _node_id: &str,
         _error: &herness_common::error::AppError,
+        _config: &Value,
     ) -> herness_common::error::AppResult<()> {
         self.node_errors.fetch_add(1, Ordering::Relaxed);
         Ok(())

@@ -1,6 +1,7 @@
 import client from './client';
 import type { Agent } from '../types/agent';
 
+// Agent CRUD
 export async function listAgents(): Promise<{ agents: Agent[] }> {
   const res = await client.get('/agents');
   return res.data;

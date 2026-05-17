@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::node::traits::{NodeContext, NodeHandler, NodeOutput};
-use herness_common::error::AppResult;
+use herness_common::error::{AppError, AppResult};
 
 pub struct TransformNode;
 
@@ -13,7 +13,6 @@ impl NodeHandler for TransformNode {
     }
 
     async fn execute(&self, ctx: &mut NodeContext, config: Value) -> AppResult<NodeOutput> {
-        // Apply transformation: copy input through with optional field mapping
         if let Some(map) = config.get("field_map").and_then(|v| v.as_object()) {
             let mut output = serde_json::Map::new();
             for (target, source) in map {
@@ -22,9 +21,20 @@ impl NodeHandler for TransformNode {
                     output.insert(target.clone(), value.clone());
                 }
             }
-            let _ = Value::Object(output);
+            ctx.set_var("transform_output", Value::Object(output));
+        } else {
+            ctx.set_var("transform_output", ctx.input.clone());
         }
         Ok(NodeOutput::Continue)
+    }
+
+    fn validate_config(&self, config: &Value) -> AppResult<()> {
+        if let Some(map) = config.get("field_map").and_then(|v| v.as_object()) {
+            if map.is_empty() {
+                return Err(AppError::Validation("field_map must not be empty".into()));
+            }
+        }
+        Ok(())
     }
 }
 

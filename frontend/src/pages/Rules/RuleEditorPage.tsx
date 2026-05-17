@@ -1,6 +1,12 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import Button from '../../components/common/Button';
+import { createRule, updateRule, getRule } from '../../api/rules';
+import { useRuleValidation } from '../../hooks/useRuleValidation';
+import { FlowEditor, InterceptorsPanel, createDefaultDsl } from './FlowEditor';
+import type { RuleChainDsl, InterceptorConfig } from '../../types/rule';
+
+const DEFAULT_DSL_JSON = JSON.stringify(createDefaultDsl(), null, 2);
 
 export default function RuleEditorPage() {
   const { id } = useParams();
@@ -9,52 +15,183 @@ export default function RuleEditorPage() {
 
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [dslJson, setDslJson] = useState(`{
-  "chain_id": "",
-  "version": "1.0",
-  "nodes": [
-    {"id": "start", "type": "start", "config": {}},
-    {"id": "end", "type": "end", "config": {}}
-  ],
-  "edges": [{"from": "start", "to": "end"}],
-  "interceptors": []
-}`);
-  const [viewMode, setViewMode] = useState<'visual' | 'json'>('json');
+  const [dsl, setDsl] = useState<RuleChainDsl>(createDefaultDsl());
+  const [dslJson, setDslJson] = useState(DEFAULT_DSL_JSON);
+  const [interceptors, setInterceptors] = useState<InterceptorConfig[]>([]);
+  const [viewMode, setViewMode] = useState<'visual' | 'json'>('visual');
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSave = () => {
-    // TODO: Save rule via API
-    navigate('/rules');
+  const { validate, validationResult, validating } = useRuleValidation();
+
+  // Load existing rule on edit
+  useEffect(() => {
+    if (!isNew && id) {
+      setLoading(true);
+      getRule(id)
+        .then((rule) => {
+          setName(rule.name);
+          setDescription(rule.description || '');
+          setDsl(rule.dsl);
+          setDslJson(JSON.stringify(rule.dsl, null, 2));
+          setInterceptors(rule.dsl.interceptors ?? []);
+        })
+        .catch(() => {
+          setError('Failed to load rule');
+          navigate('/rules');
+        })
+        .finally(() => setLoading(false));
+    }
+  }, [id, isNew, navigate]);
+
+  // Handle DSL changes from the FlowEditor canvas
+  const handleDslChange = useCallback((newDsl: RuleChainDsl) => {
+    // Preserve interceptors from state since the canvas doesn't manage them
+    setDsl((prev) => ({
+      ...newDsl,
+      interceptors: prev.interceptors,
+    }));
+  }, []);
+
+  // Keep dslJson in sync with dsl (no side effects inside state updaters)
+  useEffect(() => {
+    const merged = { ...dsl, interceptors };
+    setDslJson(JSON.stringify(merged, null, 2));
+  }, [dsl, interceptors]);
+
+  // Handle interceptors changes
+  const handleInterceptorsChange = useCallback(
+    (newInterceptors: InterceptorConfig[]) => {
+      setInterceptors(newInterceptors);
+      const updated = { ...dsl, interceptors: newInterceptors };
+      setDsl(updated);
+      setDslJson(JSON.stringify(updated, null, 2));
+    },
+    [dsl],
+  );
+
+  // Switch between visual and JSON mode
+  const handleModeSwitch = (mode: 'visual' | 'json') => {
+    if (mode === 'json') {
+      // Sync latest DSL (with interceptors) to JSON before switching
+      const latest = { ...dsl, interceptors };
+      setDslJson(JSON.stringify(latest, null, 2));
+    } else {
+      // Parse JSON back to DSL
+      try {
+        const parsed = JSON.parse(dslJson);
+        if (parsed.nodes && Array.isArray(parsed.nodes)) {
+          setDsl(parsed);
+          setInterceptors(parsed.interceptors ?? []);
+          setError(null);
+        }
+      } catch {
+        setError('Cannot switch to Visual mode: invalid JSON in editor');
+        return;
+      }
+    }
+    setViewMode(mode);
   };
 
+  // Pass view-mode switch down to the FlowEditor's built-in toolbar
+  const handleViewModeSwitch = useCallback(
+    (mode: 'visual' | 'json') => {
+      handleModeSwitch(mode);
+    },
+    [handleModeSwitch],
+  );
+
+  const handleSave = async () => {
+    setError(null);
+
+    // Use the final DSL with interceptors
+    const finalDsl: RuleChainDsl = { ...dsl, interceptors };
+
+    // Validate DSL structure via API
+    const result = await validate(finalDsl);
+    if (result && !result.valid) {
+      setError('Validation failed: ' + result.warnings.join(', '));
+      return;
+    }
+
+    setSaving(true);
+    try {
+      if (isNew) {
+        const res = await createRule({ name, description, dsl: finalDsl });
+        navigate(`/rules/${res.id}`);
+      } else {
+        await updateRule(id!, { name, description, dsl: finalDsl });
+        navigate('/rules');
+      }
+    } catch {
+      setError('Failed to save rule');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="card text-center text-gray-400 py-12">Loading rule...</div>
+    );
+  }
+
   return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
+    <div className="h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-4 flex-shrink-0">
         <h1 className="text-2xl font-bold">
           {isNew ? 'New Rule' : 'Edit Rule'}
         </h1>
         <div className="flex gap-3">
           <div className="flex rounded-lg border border-gray-200 overflow-hidden">
             <button
-              onClick={() => setViewMode('visual')}
-              className={`px-3 py-1.5 text-sm ${viewMode === 'visual' ? 'bg-primary-600 text-white' : 'bg-white'}`}
+              onClick={() => handleModeSwitch('visual')}
+              className={`px-3 py-1.5 text-sm transition-colors ${
+                viewMode === 'visual'
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-white hover:bg-gray-50'
+              }`}
             >
               Visual
             </button>
             <button
-              onClick={() => setViewMode('json')}
-              className={`px-3 py-1.5 text-sm ${viewMode === 'json' ? 'bg-primary-600 text-white' : 'bg-white'}`}
+              onClick={() => handleModeSwitch('json')}
+              className={`px-3 py-1.5 text-sm transition-colors ${
+                viewMode === 'json'
+                  ? 'bg-primary-600 text-white'
+                  : 'bg-white hover:bg-gray-50'
+              }`}
             >
               JSON
             </button>
           </div>
-          <Button onClick={handleSave}>{isNew ? 'Create' : 'Save'}</Button>
+          <Button onClick={handleSave} disabled={saving || validating}>
+            {saving ? 'Saving...' : isNew ? 'Create' : 'Save'}
+          </Button>
           <Button variant="secondary" onClick={() => navigate('/rules')}>
             Cancel
           </Button>
         </div>
       </div>
 
-      <div className="mb-4">
+      {/* Error / validation display */}
+      {error && (
+        <div className="mb-3 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm flex-shrink-0">
+          {error}
+        </div>
+      )}
+      {validationResult && !validationResult.valid && (
+        <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-yellow-700 text-sm flex-shrink-0">
+          {validationResult.warnings?.map((w: string, i: number) => (
+            <div key={i}>{w}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Name & description */}
+      <div className="mb-3 flex-shrink-0">
         <input
           type="text"
           value={name}
@@ -71,27 +208,27 @@ export default function RuleEditorPage() {
         />
       </div>
 
-      {viewMode === 'visual' ? (
-        <div className="card h-[500px] flex items-center justify-center text-gray-400">
-          <div className="text-center">
-            <p className="text-lg mb-2">Visual Rule Editor</p>
-            <p className="text-sm">
-              Flowgram.ai canvas integration coming in Phase 6.
-              <br />
-              Switch to JSON mode for now.
-            </p>
-          </div>
-        </div>
-      ) : (
-        <div className="card">
-          <textarea
-            value={dslJson}
-            onChange={(e) => setDslJson(e.target.value)}
-            className="w-full h-[500px] font-mono text-sm p-4 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary-500"
-            spellCheck={false}
+      {/* Editor area */}
+      <div className="flex-1 min-h-0 flex gap-3">
+        {/* Canvas (always mounts FlowEditor; internal view mode toggling) */}
+        <div className="flex-1 min-w-0 rounded-lg border border-gray-200 overflow-hidden bg-gray-50">
+          <FlowEditor
+            dsl={dsl}
+            onChange={handleDslChange}
+            viewMode={viewMode}
+            onViewModeSwitch={handleViewModeSwitch}
           />
         </div>
-      )}
+        {/* Interceptors sidebar (only visible in visual mode) */}
+        {viewMode === 'visual' && (
+          <div className="w-56 flex-shrink-0">
+            <InterceptorsPanel
+              interceptors={interceptors}
+              onChange={handleInterceptorsChange}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

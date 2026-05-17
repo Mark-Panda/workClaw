@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use serde_json::Value;
 use tracing::info;
 
 use crate::engine::context::ExecutionContext;
@@ -14,7 +15,12 @@ impl Interceptor for LoggingInterceptor {
         "logging"
     }
 
-    async fn before(&self, _ctx: &mut ExecutionContext, node_id: &str) -> AppResult<()> {
+    async fn before(
+        &self,
+        _ctx: &mut ExecutionContext,
+        node_id: &str,
+        _config: &Value,
+    ) -> AppResult<()> {
         info!("[interceptor:logging] Entering node: {}", node_id);
         Ok(())
     }
@@ -24,6 +30,7 @@ impl Interceptor for LoggingInterceptor {
         _ctx: &mut ExecutionContext,
         node_id: &str,
         _result: &NodeOutput,
+        _config: &Value,
     ) -> AppResult<()> {
         info!("[interceptor:logging] Exiting node: {}", node_id);
         Ok(())
@@ -34,6 +41,7 @@ impl Interceptor for LoggingInterceptor {
         _ctx: &mut ExecutionContext,
         node_id: &str,
         error: &AppError,
+        _config: &Value,
     ) -> AppResult<()> {
         info!(
             "[interceptor:logging] Error in node {}: {}",

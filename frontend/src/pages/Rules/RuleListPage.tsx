@@ -1,9 +1,19 @@
+import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useStore } from '../../store';
 import Button from '../../components/common/Button';
+import { listRules } from '../../api/rules';
 
 export default function RuleListPage() {
-  const { rules } = useStore();
+  const { rules, rulesLoading, setRules, setRulesLoading } = useStore();
+
+  useEffect(() => {
+    setRulesLoading(true);
+    listRules()
+      .then((data) => setRules(data.rules))
+      .catch(() => setRules([]))
+      .finally(() => setRulesLoading(false));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div>
@@ -14,7 +24,11 @@ export default function RuleListPage() {
         </Link>
       </div>
 
-      {rules.length === 0 ? (
+      {rulesLoading ? (
+        <div className="card text-center text-gray-400 py-12">
+          Loading rules...
+        </div>
+      ) : rules.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
           No rule chains yet. Create your first rule chain to get started.
         </div>

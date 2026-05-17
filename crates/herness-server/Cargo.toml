@@ -26,3 +26,5 @@ futures = { workspace = true }
 sqlx = { workspace = true }
 tokio-stream = { workspace = true }
 dotenvy = "0.15"
+zip = "2"
+toml = "0.8"
