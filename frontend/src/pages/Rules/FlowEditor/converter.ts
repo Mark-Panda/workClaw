@@ -72,6 +72,13 @@ function walkDslNode(
 
   // Fork nodes with multiple children → dynamicSplit with branch blocks
   const isFork = ruleNodeType === 'fork' && children.length > 1;
+
+  // Container nodes (loop, subchain) with multiple children may have body
+  // children (inside the container) vs. a single "flow" child (which continues
+  // the main linear chain).  The heuristic: the flow child is the one with
+  // outgoing edges to nodes OUTSIDE this container's children set.
+  const isContainer = (ruleNodeType === 'loop' || ruleNodeType === 'subchain') && children.length > 1;
+
   const flowType = isFork ? 'dynamicSplit' : toFlowGramType(ruleNodeType);
 
   const nodeData: FlowNodeData = {
@@ -86,16 +93,19 @@ function walkDslNode(
     data: nodeData,
   };
 
+  // ── Fork branch blocks ──────────────────────────────────────────
   if (isFork) {
     flowNode.blocks = children.map((childId, idx) => {
       const blockId = `${dslNode.id}_branch_${idx}`;
       const branchChildren: FlowNodeJSON[] = [];
       let current = childId;
       while (current) {
-        const childNode = walkDslNode(current, nodeMap, adjacency, visited);
-        if (childNode) branchChildren.push(childNode);
+        // Check for join BEFORE consuming: join must stay at root level
+        // so its outgoing edges (join→end) are preserved correctly.
         const currentNode = nodeMap.get(current);
         if (currentNode && currentNode.type === 'join') break;
+        const childNode = walkDslNode(current, nodeMap, adjacency, visited);
+        if (childNode) branchChildren.push(childNode);
         const nextChildren = adjacency.get(current);
         current = nextChildren && nextChildren.length === 1 ? nextChildren[0] : '';
       }
@@ -114,8 +124,54 @@ function walkDslNode(
     });
   }
 
-  // Linear chain nodes: children become siblings (visited separately above),
-  // so we do NOT nest them in blocks.
+  // ── Container body blocks (loop / subchain) ─────────────────────
+  if (isContainer) {
+    const childSet = new Set(children);
+
+    // Find the flow child: one that has outgoing edges to nodes OUTSIDE
+    // this container's direct children.  The remaining children are body
+    // children that should be placed inside the container's blocks.
+    const flowChildIdx = children.findIndex((childId) => {
+      const out = adjacency.get(childId) ?? [];
+      return out.some((t) => !childSet.has(t) && t !== nodeId);
+    });
+
+    // Fallback: treat the LAST child as the flow child.
+    const flowIdx = flowChildIdx >= 0 ? flowChildIdx : children.length - 1;
+
+    const bodyChildren = children.filter((_, i) => i !== flowIdx);
+
+    if (bodyChildren.length > 0) {
+      // Collect all body child nodes and their descendent chains into a
+      // SINGLE body block (unlike fork branches which need separate blocks).
+      const bodyNodes: FlowNodeJSON[] = [];
+      for (const childId of bodyChildren) {
+        let current = childId;
+        while (current) {
+          const n = walkDslNode(current, nodeMap, adjacency, visited);
+          if (n) bodyNodes.push(n);
+          const next = adjacency.get(current);
+          current = next && next.length === 1 ? next[0] : '';
+        }
+      }
+      flowNode.blocks = [
+        {
+          id: `${dslNode.id}__body`,
+          type: 'block' as const,
+          data: {
+            ruleNodeType: '__body__',
+            title: 'Body',
+            config: {},
+            __isBranch: true,
+          } satisfies FlowNodeData,
+          blocks: bodyNodes.length > 0 ? bodyNodes : undefined,
+        },
+      ];
+    }
+  }
+
+  // Linear chain nodes: remaining children become siblings (visited separately
+  // in dslToFlowDocument's second pass), so we do NOT nest them in blocks.
   return flowNode;
 }
 
@@ -197,11 +253,12 @@ export function flowDocumentToDsl(
           walk(child, block.id, node.id);
         }
       } else {
-        // (3) Block is a direct child node — walk it immediately.
-        //     This handles cases where FlowGram's toJSON() nests children
-        //     inside a non-fork node's blocks (e.g., loop's children are
-        //     placed in loop's blocks by toJSON due to FlowGram's entity tree).
-        walk(block, group, node.id);
+        // (3) Block is a direct child node — use a sub-group keyed by the
+        //     parent node's ID so that children are isolated from root-level
+        //     siblings.  Without this, loop or subchain children end up in the
+        //     same group as root-level nodes (e.g. `end`), causing the
+        //     converter to generate incorrect edges like rest_client→end.
+        walk(block, `${node.id}__children`, node.id);
       }
     }
   }

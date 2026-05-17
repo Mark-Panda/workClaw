@@ -15,6 +15,10 @@ export function useRuleValidation() {
       const result = await validateRule(dsl);
       setValidationResult(result);
       return result;
+    } catch {
+      const errResult = { valid: false, warnings: ['后端验证服务异常 (422)'] };
+      setValidationResult(errResult);
+      return errResult;
     } finally {
       setValidating(false);
     }

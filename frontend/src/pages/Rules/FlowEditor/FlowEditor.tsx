@@ -1,4 +1,4 @@
-import { useCallback, useRef, useMemo } from 'react';
+import { useCallback, useRef, useMemo, useContext, useEffect } from 'react';
 import {
   FixedLayoutEditorProvider,
   EditorRenderer,
@@ -102,15 +102,27 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
       // (e.g. loop→end as a second outgoing edge, rest_client→loop as a back-edge).
       // The converter generates edges between consecutive siblings within each group,
       // which loses multi-target and back-edges. We restore them from the previous
-      // DSL state as long as both endpoints still exist.
+      // DSL state, but ONLY when the edge involves a container type (loop, fork,
+      // subchain) — these are the cases the converter fundamentally cannot express.
+      // Without this guard, stale edges from prevDsl accumulate indefinitely and
+      // cannot be removed through canvas operations.
+      const CONTAINER_TYPES = new Set(['loop', 'fork', 'subchain']);
+      const newNodeMap = new Map(newDsl.nodes.map((n) => [n.id, n]));
       const nodeIds = new Set(newDsl.nodes.map((n) => n.id));
       const newEdgeKeys = new Set(newDsl.edges.map((e) => `${e.from}→${e.to}`));
 
       for (const e of prevDsl.edges) {
         const key = `${e.from}→${e.to}`;
         if (nodeIds.has(e.from) && nodeIds.has(e.to) && !newEdgeKeys.has(key)) {
-          newDsl.edges.push(e);
-          newEdgeKeys.add(key);
+          // Only restore edges where a container node is involved — these
+          // represent multi-outgoing (loop→child + loop→end) or back-edge
+          // patterns (inside_container → container_parent).
+          const srcType = newNodeMap.get(e.from)?.type ?? '';
+          const tgtType = newNodeMap.get(e.to)?.type ?? '';
+          if (CONTAINER_TYPES.has(srcType) || CONTAINER_TYPES.has(tgtType)) {
+            newDsl.edges.push(e);
+            newEdgeKeys.add(key);
+          }
         }
       }
 
@@ -132,6 +144,30 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
     },
     [notifyChange],
   );
+
+  const { selectedNode, setSelectedNode } = useContext(NodeSelectionContext);
+
+  // Keyboard: Delete/Backspace removes the selected node
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!selectedNode || readonly) return;
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        // Don't delete if user is typing in an input
+        if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+        e.preventDefault();
+        const ctx = editorRef.current;
+        if (!ctx || ctx.document.disposed) return;
+        const entity = (ctx.document as Record<string, any>).getNode?.(selectedNode.id);
+        if (entity && typeof entity.deleteNode === 'function') {
+          if (window.confirm(`确认删除节点「${selectedNode.title}」？`)) {
+            entity.deleteNode();
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedNode, readonly]);
 
   // In JSON mode, render a textarea. Read from canvasDslRef which is kept in sync
   // with the live canvas state by notifyChange — this ensures nodes added in the
@@ -165,7 +201,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
 
   return (
     <NotifyContext.Provider value={notifyChange}>
-    <div className="h-full w-full relative flowgram-editor-wrap">
+    <div className="h-full w-full relative flowgram-editor-wrap" key="visual">
       <FixedLayoutEditorProvider
         ref={editorRef}
         initialData={initialData}
@@ -193,7 +229,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
         }}
       >
         <div className="flex h-full w-full">
-          <div className="flex-1 min-w-0 relative">
+          <div className="flex-1 min-w-0 relative" onClick={() => setSelectedNode(null)}>
             <EditorRenderer />
             {!readonly && <EditorToolbar viewMode={viewMode} onViewModeSwitch={onViewModeSwitch} />}
           </div>

@@ -1,4 +1,4 @@
-import { useState, useContext, useEffect, useRef } from 'react';
+import { useState, useContext, useEffect } from 'react';
 import { useNodeRender } from '@flowgram.ai/fixed-layout-editor';
 import type { RuleNodeType } from './nodes';
 import { NODE_LABELS, NODE_COLORS, nodeIcon, toRuleNodeType } from './nodes';
@@ -28,7 +28,7 @@ function PortDot({ side }: { side: 'left' | 'right' }) {
 }
 
 export default function DefaultRuleNode() {
-  const { id, data, activated, onMouseEnter, onMouseLeave, form } = useNodeRender();
+  const { id, data, activated, onMouseEnter, onMouseLeave, form, deleteNode } = useNodeRender();
   const [hovered, setHovered] = useState(false);
   const notifyChange = useContext(NotifyContext);
   const { setSelectedNode } = useContext(NodeSelectionContext);
@@ -42,26 +42,24 @@ export default function DefaultRuleNode() {
     return () => disposable.dispose();
   }, [form, notifyChange]);
 
-  // Compute stable values so they can be used in useEffect without triggering
+  // Compute stable values so they can be used in callbacks without re-renders
   const myNodeType = (data?.ruleNodeType as string) ?? toRuleNodeType(data?.type as string) ?? '';
   const myTitle = (data?.title as string) ?? NODE_LABELS[myNodeType as RuleNodeType] ?? myNodeType;
   const nodeId = id as string;
 
-  // Track activation changes with refs to prevent infinite render loops
-  const prevActivatedRef = useRef(activated);
+  // Select node on click (not hover). Stop propagation so background clicks
+  // on the canvas container won't also fire.
+  const handleNodeClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedNode({ id: nodeId, ruleNodeType: myNodeType, title: myTitle });
+  };
 
-  // When node activation changes, announce to context
+  // Deselect when this node loses activation (another node selected or background clicked)
   useEffect(() => {
-    const changed = prevActivatedRef.current !== activated;
-    prevActivatedRef.current = activated;
-
-    if (!changed) return;
-    if (activated) {
-      setSelectedNode({ id: nodeId, ruleNodeType: myNodeType, title: myTitle });
-    } else {
+    if (!activated) {
       setSelectedNode((prev) => (prev?.id === nodeId ? null : prev));
     }
-  }, [activated, nodeId, myNodeType, myTitle, setSelectedNode]);
+  }, [activated, nodeId, setSelectedNode]);
 
   const ruleNodeType = (data?.ruleNodeType as RuleNodeType) ?? toRuleNodeType(data?.type as string) ?? 'start' as RuleNodeType;
   const title = (data?.title as string) ?? NODE_LABELS[ruleNodeType as RuleNodeType] ?? ruleNodeType;
@@ -72,6 +70,7 @@ export default function DefaultRuleNode() {
 
   return (
     <div
+      onClick={handleNodeClick}
       onMouseEnter={(e) => { setHovered(true); onMouseEnter?.(e); }}
       onMouseLeave={(e) => { setHovered(false); onMouseLeave?.(e); }}
       style={{
@@ -156,6 +155,35 @@ export default function DefaultRuleNode() {
           {ruleNodeType}
         </span>
       </div>
+
+      {/* Delete button — visible on hover, hidden for start node */}
+      {hovered && ruleNodeType !== 'start' && (
+        <div
+          onClick={(e) => {
+            e.stopPropagation();
+            if (window.confirm(`确认删除节点「${title}」？`)) {
+              deleteNode();
+            }
+          }}
+          style={{
+            width: 20,
+            height: 20,
+            borderRadius: 4,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            color: '#9ca3af',
+            fontSize: 14,
+            fontWeight: 600,
+            flexShrink: 0,
+            marginRight: 4,
+          }}
+          title="删除节点"
+        >
+          ×
+        </div>
+      )}
 
       {/* Output port */}
       <PortDot side="right" />

@@ -31,6 +31,6 @@ export async function executeRule(id: string, input: unknown): Promise<{ status:
 }
 
 export async function validateRule(dsl: RuleChainDsl): Promise<{ valid: boolean; warnings: string[] }> {
-  const res = await client.post('/rules/validate', dsl);
+  const res = await client.post('/rules/validate', { dsl });
   return res.data;
 }
