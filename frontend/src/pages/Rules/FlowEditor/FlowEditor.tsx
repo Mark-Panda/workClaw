@@ -8,15 +8,17 @@ import {
   type FlowNodeJSON,
   type FlowNodeType,
   FlowRendererKey,
+  FlowNodeBaseType,
 } from '@flowgram.ai/fixed-layout-editor';
 import type { FlowDocumentJSON } from '@flowgram.ai/fixed-layout-editor';
 import { defaultFixedSemiMaterials } from '@flowgram.ai/fixed-semi-materials';
 import { Tooltip } from '@douyinfe/semi-ui';
 import type { RuleChainDsl, RuleEdge } from '../../../types/rule';
-import { buildRegistries } from './nodes';
+import { buildRegistries, NODE_CATEGORIES, NODE_LABELS, NODE_COLORS } from './nodes';
 import { dslToFlowDocument, flowDocumentToDsl } from './converter';
 import { NotifyContext } from './context';
 import NodeAdder from './NodeAdder';
+import BranchAdder from './BranchAdder';
 import DefaultRuleNode from './DefaultRuleNode';
 import CustomCollapse from './Collapse';
 import NodeConfigPanel from './NodeConfigPanel';
@@ -206,7 +208,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
       // subchain) — these are the cases the converter fundamentally cannot express.
       // Without this guard, stale edges from prevDsl accumulate indefinitely and
       // cannot be removed through canvas operations.
-      const CONTAINER_TYPES = new Set(['loop', 'fork', 'subchain']);
+      const CONTAINER_TYPES = new Set(['loop', 'fork', 'subchain', 'switch', 'if', 'try_catch']);
       const newNodeMap = new Map(newDsl.nodes.map((n) => [n.id, n]));
       const nodeIds = new Set(newDsl.nodes.map((n) => n.id));
       const newEdgeKeys = new Set(newDsl.edges.map((e) => `${e.from}→${e.to}`));
@@ -359,6 +361,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
           components: {
             ...defaultFixedSemiMaterials,
             [FlowRendererKey.ADDER]: NodeAdder,
+            [FlowRendererKey.BRANCH_ADDER]: BranchAdder,
             [FlowRendererKey.COLLAPSE]: CustomCollapse,
           },
           renderDefaultNode: DefaultRuleNode,

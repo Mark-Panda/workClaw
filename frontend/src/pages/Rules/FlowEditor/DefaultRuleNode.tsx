@@ -1,6 +1,5 @@
 import { useState, useContext, useEffect } from 'react';
 import { useNodeRender } from '@flowgram.ai/fixed-layout-editor';
-import type { RuleNodeType } from './nodes';
 import { NODE_LABELS, NODE_COLORS, nodeIcon, toRuleNodeType } from './nodes';
 import { NotifyContext } from './context';
 import { NodeSelectionContext } from './nodeSelection';
@@ -42,31 +41,75 @@ export default function DefaultRuleNode() {
     return () => disposable.dispose();
   }, [form, notifyChange]);
 
-  // Compute stable values so they can be used in callbacks without re-renders
-  const myNodeType = (data?.ruleNodeType as string) ?? toRuleNodeType(data?.type as string) ?? '';
-  const myTitle = (data?.title as string) ?? NODE_LABELS[myNodeType as RuleNodeType] ?? myNodeType;
+  // Node type and metadata
+  // FlowGram internal structural nodes (blockIcon, inlineBlocks, etc.) may not have
+  // our ruleNodeType or a type field at all — guard against undefined.
+  const myNodeType = (data?.ruleNodeType as string) ?? (typeof data?.type === 'string' ? toRuleNodeType(data?.type as string) : '');
+  const myTitle = (data?.title as string) ?? NODE_LABELS[myNodeType] ?? myNodeType;
   const nodeId = id as string;
 
-  // Select node on click (not hover). Stop propagation so background clicks
-  // on the canvas container won't also fire.
+  // If this is not a recognized rule node (e.g. FlowGram internal node), render nothing
+  if (!myNodeType) return null;
+
+  // Select node on click
   const handleNodeClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     setSelectedNode({ id: nodeId, ruleNodeType: myNodeType, title: myTitle });
   };
 
-  // Deselect when this node loses activation (another node selected or background clicked)
+  // Deselect when this node loses activation
   useEffect(() => {
     if (!activated) {
       setSelectedNode((prev) => (prev?.id === nodeId ? null : prev));
     }
   }, [activated, nodeId, setSelectedNode]);
 
-  const ruleNodeType = (data?.ruleNodeType as RuleNodeType) ?? toRuleNodeType(data?.type as string) ?? 'start' as RuleNodeType;
-  const title = (data?.title as string) ?? NODE_LABELS[ruleNodeType as RuleNodeType] ?? ruleNodeType;
-  const color = NODE_COLORS[ruleNodeType as RuleNodeType] ?? '#8c8c8c';
-  const icon = nodeIcon(ruleNodeType as RuleNodeType);
+  const ruleNodeType = myNodeType;
+  const title = (data?.title as string) ?? NODE_LABELS[ruleNodeType] ?? ruleNodeType;
+  const color = NODE_COLORS[ruleNodeType] ?? '#8c8c8c';
+  const icon = nodeIcon(ruleNodeType);
 
   const isActive = activated || hovered;
+  const hasFormErrors = form?.state.invalid;
+
+  // Determine if this is a branch/block node (smaller, minimal)
+  const isBlock = ['if_block', 'case', 'case_default', 'try_block', 'catch_block', '__branch__'].includes(ruleNodeType);
+
+  if (isBlock) {
+    return (
+      <div
+        onClick={handleNodeClick}
+        onMouseEnter={(e) => { setHovered(true); onMouseEnter?.(e); }}
+        onMouseLeave={(e) => { setHovered(false); onMouseLeave?.(e); }}
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          background: ruleNodeType === 'if_block'
+            ? (title === 'True' || title === 'true' ? '#e6f7e6' : '#fff1f0')
+            : '#fff',
+          border: `1px solid ${isActive ? color : '#d9d9d9'}`,
+          borderRadius: 4,
+          cursor: 'pointer',
+          boxSizing: 'border-box',
+          minWidth: 60,
+          height: 20,
+          padding: '0 8px',
+          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+          fontSize: 10,
+          fontWeight: 600,
+          color: ruleNodeType === 'if_block'
+            ? (title === 'True' || title === 'true' ? '#389e0d' : '#cf1322')
+            : '#595959',
+          textTransform: 'uppercase',
+          letterSpacing: '0.5px',
+        }}
+      >
+        {title}
+      </div>
+    );
+  }
 
   return (
     <div
@@ -78,15 +121,16 @@ export default function DefaultRuleNode() {
         display: 'flex',
         alignItems: 'center',
         background: '#fff',
-        border: `1px solid ${isActive ? color : '#d9d9d9'}`,
+        border: `1px solid ${isActive ? '#82a7fc' : 'rgba(6,7,9,0.15)'}`,
         borderRadius: 8,
         boxShadow: isActive
-          ? `0 0 0 2px ${color}22, 0 2px 8px rgba(0,0,0,0.08)`
+          ? '0 2px 6px 0 rgba(0,0,0,0.04), 0 4px 12px 0 rgba(0,0,0,0.02)'
           : '0 1px 2px rgba(0,0,0,0.04)',
+        outline: hasFormErrors ? '1px solid red' : 'none',
         cursor: 'pointer',
         boxSizing: 'border-box',
         minWidth: 140,
-        height: 40,
+        minHeight: 44,
         transition: 'border-color 0.15s, box-shadow 0.15s',
         overflow: 'visible',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -103,6 +147,7 @@ export default function DefaultRuleNode() {
           background: color,
           borderRadius: '7px 0 0 7px',
           flexShrink: 0,
+          minHeight: 44,
         }}
       />
 
@@ -123,40 +168,36 @@ export default function DefaultRuleNode() {
         <img src={icon} alt="" width={16} height={16} style={{ display: 'block' }} />
       </div>
 
-      {/* Title */}
-      <div
-        style={{
-          flex: 1,
-          padding: '0 10px',
-          fontSize: 12,
-          fontWeight: 500,
-          color: '#1f2937',
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          lineHeight: '40px',
-        }}
-      >
-        {title}
-      </div>
-
-      {/* Type badge */}
-      <div style={{ paddingRight: 10, flexShrink: 0 }}>
-        <span
+      {/* Title + type */}
+      <div style={{ flex: 1, padding: '4px 10px', minWidth: 0 }}>
+        <div
+          style={{
+            fontSize: 12,
+            fontWeight: 500,
+            color: '#1f2937',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            lineHeight: '18px',
+          }}
+        >
+          {title}
+        </div>
+        <div
           style={{
             fontSize: 10,
-            color,
-            fontWeight: 600,
-            textTransform: 'uppercase',
-            letterSpacing: '0.3px',
-            opacity: 0.7,
+            color: '#8c8c8c',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            lineHeight: '14px',
           }}
         >
           {ruleNodeType}
-        </span>
+        </div>
       </div>
 
-      {/* Delete button — visible on hover, hidden for start node */}
+      {/* Delete button */}
       {hovered && ruleNodeType !== 'start' && (
         <div
           onClick={(e) => {

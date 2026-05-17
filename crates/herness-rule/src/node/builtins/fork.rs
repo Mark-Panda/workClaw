@@ -237,7 +237,6 @@ mod tests {
     use crate::node::builtins::start::StartNode;
     use crate::node::registry::NodeRegistry;
     use crate::interceptor::InterceptorRegistry;
-    use crate::dsl::types::{RuleChain, RuleNode, RuleEdge};
 
     #[tokio::test]
     async fn test_fork_requires_branches() {

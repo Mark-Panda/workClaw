@@ -3,7 +3,7 @@ import { useClientContext } from '@flowgram.ai/fixed-layout-editor';
 import type { FlowNodeEntity, FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
 import { buildRegistries } from './nodes';
 import type { RuleNodeType } from './nodes';
-import { NODE_LABELS, NODE_COLORS, NODE_CATEGORIES, toFlowGramType } from './nodes';
+import { NODE_LABELS, NODE_COLORS, NODE_CATEGORIES, getNodeFlowType } from './nodes';
 
 /**
  * The "+" button rendered between nodes. On click, shows a popover listing
@@ -21,7 +21,7 @@ export default function NodeAdder(props: {
   const registries = buildRegistries();
 
   const add = (type: RuleNodeType) => {
-    const registry = registries.find((r) => r.type === toFlowGramType(type));
+    const registry = registries.find((r) => r.type === getNodeFlowType(type));
     if (!registry) return;
     const json = registry.onAdd(ctx as unknown as FixedLayoutPluginContext, from);
     const block = ctx.operation.addFromNode(from, { ...json });
@@ -112,7 +112,7 @@ export default function NodeAdder(props: {
                     {cat.types.map((type) => (
                       <div
                         key={type}
-                        onClick={() => add(type)}
+                        onClick={() => add(type as RuleNodeType)}
                         style={{
                           display: 'flex',
                           alignItems: 'center',

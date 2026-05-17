@@ -1,6 +1,7 @@
 export {
   buildRegistries,
   createNodeJSON,
+  getNodeFlowType,
   makeRegistry,
   NODE_CATEGORIES,
   NODE_COLORS,
@@ -11,4 +12,4 @@ export {
   toFlowGramType,
   toRuleNodeType,
 } from './types';
-export type { RuleNodeType, RuleNodeRegistry } from './types';
+export type { RuleNodeRegistry, RuleNodeType } from './types';

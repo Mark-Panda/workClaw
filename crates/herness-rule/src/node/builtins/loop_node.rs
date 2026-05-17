@@ -161,8 +161,46 @@ mod tests {
 
     #[tokio::test]
     async fn test_loop_sets_variables() {
+        let mut node_registry = NodeRegistry::new();
+        node_registry.register(Arc::new(StartNode));
+        node_registry.register(Arc::new(EndNode));
+
+        let interceptor_registry = InterceptorRegistry::new();
+        let engine = Arc::new(RuleEngine::new(
+            Arc::new(node_registry),
+            Arc::new(interceptor_registry),
+        ));
+
+        let chain = crate::dsl::types::RuleChain {
+            chain_id: "test-loop-vars".into(),
+            version: "1.0".into(),
+            nodes: vec![
+                crate::dsl::types::RuleNode {
+                    id: "loop".into(),
+                    node_type: "loop".into(),
+                    config: Default::default(),
+                },
+                crate::dsl::types::RuleNode {
+                    id: "end".into(),
+                    node_type: "end".into(),
+                    config: Default::default(),
+                },
+            ],
+            edges: vec![crate::dsl::types::RuleEdge {
+                from: "loop".into(),
+                to: "end".into(),
+                label: None,
+            }],
+            interceptor_configs: vec![],
+        };
+        engine.cache_chain(chain);
+
         let node = LoopNode::new();
+        node.set_engine(engine).await;
+
         let mut ctx = NodeContext::new(Value::Null);
+        ctx.chain_id = "test-loop-vars".into();
+        ctx.current_node_id = "loop".into();
         ctx.set_var("items", serde_json::json!(["a", "b", "c"]));
 
         let config = serde_json::json!({

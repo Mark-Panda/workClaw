@@ -6,11 +6,17 @@ use herness_rule::interceptor::builtins::metrics::MetricsInterceptor;
 use herness_rule::interceptor::builtins::validation::ValidationInterceptor;
 use herness_rule::interceptor::InterceptorRegistry;
 use herness_rule::node::builtins::assign::AssignNode;
+use herness_rule::node::builtins::break_loop::BreakLoopNode;
+use herness_rule::node::builtins::case::CaseNode;
+use herness_rule::node::builtins::catch_block::CatchBlock;
 use herness_rule::node::builtins::condition::ConditionNode;
 use herness_rule::node::builtins::delay::DelayNode;
 use herness_rule::node::builtins::end::EndNode;
 use herness_rule::node::builtins::fork::ForkNode;
+use herness_rule::node::builtins::if_block::IfBlock;
+use herness_rule::node::builtins::if_node::IfNode;
 use herness_rule::node::builtins::join::JoinNode;
+use herness_rule::node::builtins::llm::LlmNode;
 use herness_rule::node::builtins::log_node::LogNode;
 use herness_rule::node::builtins::loop_node::LoopNode;
 use herness_rule::node::builtins::notification::NotificationNode;
@@ -18,7 +24,9 @@ use herness_rule::node::builtins::rest_client::RestClientNode;
 use herness_rule::node::builtins::script::ScriptNode;
 use herness_rule::node::builtins::start::StartNode;
 use herness_rule::node::builtins::subchain::SubchainNode;
+use herness_rule::node::builtins::switch::SwitchNode;
 use herness_rule::node::builtins::transform::TransformNode;
+use herness_rule::node::builtins::try_catch::TryCatchNode;
 use herness_rule::node::registry::NodeRegistry;
 use herness_server::api::router::{create_router, AppState};
 use herness_server::config::ServerConfig;
@@ -36,7 +44,8 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("Database initialized");
 
     // Build node registry
-    let (node_registry, fork_node, subchain_node, loop_node) = build_node_registry();
+    let (node_registry, fork_node, subchain_node, loop_node, switch_node, try_catch_node) =
+        build_node_registry();
     let node_registry = Arc::new(node_registry);
     let interceptor_registry = Arc::new(build_interceptor_registry());
 
@@ -50,6 +59,8 @@ async fn main() -> anyhow::Result<()> {
     fork_node.set_engine(rule_engine.clone()).await;
     subchain_node.set_engine(rule_engine.clone()).await;
     loop_node.set_engine(rule_engine.clone()).await;
+    switch_node.set_engine(rule_engine.clone()).await;
+    try_catch_node.set_engine(rule_engine.clone()).await;
 
     let state = AppState {
         pool,
@@ -71,6 +82,8 @@ fn build_node_registry() -> (
     Arc<ForkNode>,
     Arc<SubchainNode>,
     Arc<LoopNode>,
+    Arc<SwitchNode>,
+    Arc<TryCatchNode>,
 ) {
     let mut registry = NodeRegistry::new();
 
@@ -86,17 +99,34 @@ fn build_node_registry() -> (
     registry.register(Arc::new(ScriptNode));
     registry.register(Arc::new(NotificationNode));
     registry.register(Arc::new(JoinNode));
+    registry.register(Arc::new(BreakLoopNode));
+    registry.register(Arc::new(CaseNode));
+    registry.register(Arc::new(CatchBlock));
+    registry.register(Arc::new(IfBlock));
+    registry.register(Arc::new(IfNode));
+    registry.register(Arc::new(LlmNode));
 
     // Nodes that need engine/registry reference — keep Arcs to wire up later
     let fork_node = Arc::new(ForkNode::new());
     let subchain_node = Arc::new(SubchainNode::new());
     let loop_node = Arc::new(LoopNode::new());
+    let switch_node = Arc::new(SwitchNode::new());
+    let try_catch_node = Arc::new(TryCatchNode::new());
 
     registry.register(fork_node.clone());
     registry.register(subchain_node.clone());
     registry.register(loop_node.clone());
+    registry.register(switch_node.clone());
+    registry.register(try_catch_node.clone());
 
-    (registry, fork_node, subchain_node, loop_node)
+    (
+        registry,
+        fork_node,
+        subchain_node,
+        loop_node,
+        switch_node,
+        try_catch_node,
+    )
 }
 
 fn build_interceptor_registry() -> InterceptorRegistry {

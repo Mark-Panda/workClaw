@@ -25,6 +25,72 @@ function makeBodyBlock(id: string, children: FlowNodeJSON[]): FlowNodeJSON {
 // ─── dslToFlowDocument tests ────────────────────────────────────
 
 describe('dslToFlowDocument', () => {
+  it('branch blocks do NOT have type field set (relies on FlowGram addInlineBlocks)', () => {
+    const dsl: RuleChainDsl = {
+      chain_id: 'test',
+      version: '1.0',
+      nodes: [
+        { id: 'start', type: 'start', config: {} },
+        { id: 'fork', type: 'fork', config: {} },
+        { id: 'b1', type: 'log', config: {} },
+        { id: 'b2', type: 'log', config: {} },
+        { id: 'join', type: 'join', config: {} },
+        { id: 'end', type: 'end', config: {} },
+      ],
+      edges: [
+        { from: 'start', to: 'fork' },
+        { from: 'fork', to: 'b1' },
+        { from: 'fork', to: 'b2' },
+        { from: 'b1', to: 'join' },
+        { from: 'b2', to: 'join' },
+        { from: 'join', to: 'end' },
+      ],
+      interceptors: [],
+    };
+
+    const doc = dslToFlowDocument(dsl);
+    const forkNode = doc.nodes.find((n) => n.id === 'fork')!;
+    expect(forkNode.type).toBe('dynamicSplit');
+    expect(forkNode.blocks).toHaveLength(2);
+
+    for (const block of forkNode.blocks!) {
+      // type must be absent so FlowGram calls addInlineBlocks instead of addBlocksAsChildren
+      expect(block.type).toBeUndefined();
+      // The block must carry __isBranch flag for flowDocumentToDsl to skip it
+      expect(block.data).toMatchObject({ __isBranch: true });
+    }
+  });
+
+  it('staticSplit blocks also omit type', () => {
+    const dsl: RuleChainDsl = {
+      chain_id: 'test',
+      version: '1.0',
+      nodes: [
+        { id: 'start', type: 'start', config: {} },
+        { id: 'if1', type: 'if', config: {} },
+        { id: 't', type: 'log', config: {} },
+        { id: 'f', type: 'log', config: {} },
+        { id: 'end', type: 'end', config: {} },
+      ],
+      edges: [
+        { from: 'start', to: 'if1' },
+        { from: 'if1', to: 't' },
+        { from: 'if1', to: 'f' },
+        { from: 't', to: 'end' },
+        { from: 'f', to: 'end' },
+      ],
+      interceptors: [],
+    };
+
+    const doc = dslToFlowDocument(dsl);
+    const ifNode = doc.nodes.find((n) => n.id === 'if1')!;
+    expect(ifNode.type).toBe('staticSplit');
+    for (const block of ifNode.blocks!) {
+      expect(block.type).toBeUndefined();
+      expect(block.data).toMatchObject({ __isBranch: true });
+    }
+  });
+
   it('converts a simple linear chain', () => {
     const dsl: RuleChainDsl = {
       chain_id: 'test',
@@ -252,5 +318,236 @@ describe('round-trip', () => {
 
     // end must have no outgoing edges
     expect(output.edges.filter((e) => e.from === 'end')).toHaveLength(0);
+  });
+
+  it('loop config enrichment sets correct body_start_id', () => {
+    // A loop with notification as body child and subchain as flow child.
+    // body_start_id should point to notification (the branch child),
+    // NOT to subchain (the consecutive flow sibling).
+    const docNodes: FlowNodeJSON[] = [
+      makeNode('start', 'start'),
+      makeNode('loop', 'loop', undefined, [
+        makeBodyBlock('loop__body', [
+          makeNode('notification', 'notification'),
+        ]),
+      ]),
+      makeNode('subchain', 'subchain'),
+      makeNode('end', 'end'),
+    ];
+    const result = flowDocumentToDsl({ nodes: docNodes }, 'test', '1.0');
+    const loopNode = result.nodes.find((n) => n.id === 'loop')!;
+    expect(loopNode.config.body_start_id).toBe('notification');
+    expect(loopNode.config.flow_out_id).toBe('end');
+  });
+
+  it('switch with case branches survives dsl→doc→dsl', () => {
+    const input: RuleChainDsl = {
+      chain_id: 'switch-test',
+      version: '1.0',
+      nodes: [
+        { id: 'start', type: 'start', config: {} },
+        { id: 'switch', type: 'switch', config: {} },
+        { id: 'case1', type: 'case', config: { condition: 'status == \"ok\"' } },
+        { id: 'action1', type: 'log_node', config: {} },
+        { id: 'case2', type: 'case', config: { condition: 'status == \"error\"' } },
+        { id: 'action2', type: 'notification', config: {} },
+        { id: 'join', type: 'join', config: {} },
+        { id: 'end', type: 'end', config: {} },
+      ],
+      edges: [
+        { from: 'start', to: 'switch' },
+        { from: 'switch', to: 'case1' },
+        { from: 'case1', to: 'action1' },
+        { from: 'action1', to: 'join' },
+        { from: 'switch', to: 'case2' },
+        { from: 'case2', to: 'action2' },
+        { from: 'action2', to: 'join' },
+        { from: 'join', to: 'end' },
+      ],
+      interceptors: [],
+    };
+
+    const doc = dslToFlowDocument(input);
+    // Switch should be a dynamicSplit with 2 branch blocks
+    const switchNode = doc.nodes.find((n) => n.id === 'switch')!;
+    expect(switchNode.type).toBe('dynamicSplit');
+    expect(switchNode.blocks).toHaveLength(2);
+
+    // Each block should contain a case + action
+    for (const block of switchNode.blocks ?? []) {
+      expect(block.data).toMatchObject({ __isBranch: true });
+      expect(block.blocks).toHaveLength(2); // case + action
+    }
+
+    // Round-trip back to DSL
+    const output = flowDocumentToDsl(doc, input.chain_id, input.version);
+    for (const e of input.edges) {
+      expect(output.edges).toContainEqual(e);
+    }
+  });
+
+  it('if/try_catch static split survives dsl→doc→dsl', () => {
+    const input: RuleChainDsl = {
+      chain_id: 'if-test',
+      version: '1.0',
+      nodes: [
+        { id: 'start', type: 'start', config: {} },
+        { id: 'if1', type: 'if', config: { expression: '1 == 1' } },
+        { id: 'true_action', type: 'log_node', config: {} },
+        { id: 'false_action', type: 'notification', config: {} },
+        { id: 'end', type: 'end', config: {} },
+      ],
+      edges: [
+        { from: 'start', to: 'if1' },
+        { from: 'if1', to: 'true_action' },
+        { from: 'if1', to: 'false_action' },
+        { from: 'true_action', to: 'end' },
+        { from: 'false_action', to: 'end' },
+      ],
+      interceptors: [],
+    };
+
+    const doc = dslToFlowDocument(input);
+    const ifNode = doc.nodes.find((n) => n.id === 'if1')!;
+    expect(ifNode.type).toBe('staticSplit');
+    expect(ifNode.blocks).toHaveLength(2);
+
+    // First block is True branch
+    const trueBlock = ifNode.blocks![0];
+    expect(trueBlock.data).toMatchObject({ __isBranch: true, ruleNodeType: 'if_block', title: 'True' });
+    expect(trueBlock.blocks![0].id).toBe('true_action');
+
+    // Second block is False branch
+    const falseBlock = ifNode.blocks![1];
+    expect(falseBlock.data).toMatchObject({ __isBranch: true, ruleNodeType: 'if_block', title: 'False' });
+    expect(falseBlock.blocks![0].id).toBe('false_action');
+
+    // Round-trip back to DSL
+    const output = flowDocumentToDsl(doc, input.chain_id, input.version);
+    for (const e of input.edges) {
+      expect(output.edges).toContainEqual(e);
+    }
+  });
+
+  it('try_catch with try/catch blocks survives dsl→doc→dsl', () => {
+    const input: RuleChainDsl = {
+      chain_id: 'tc-test',
+      version: '1.0',
+      nodes: [
+        { id: 'start', type: 'start', config: {} },
+        { id: 'tc', type: 'try_catch', config: {} },
+        { id: 'try_action', type: 'script', config: {} },
+        { id: 'catch_action', type: 'log_node', config: {} },
+        { id: 'end', type: 'end', config: {} },
+      ],
+      edges: [
+        { from: 'start', to: 'tc' },
+        { from: 'tc', to: 'try_action' },
+        { from: 'tc', to: 'catch_action' },
+        { from: 'try_action', to: 'end' },
+        { from: 'catch_action', to: 'end' },
+      ],
+      interceptors: [],
+    };
+
+    const doc = dslToFlowDocument(input);
+    const tcNode = doc.nodes.find((n) => n.id === 'tc')!;
+    expect(tcNode.type).toBe('staticSplit');
+    expect(tcNode.blocks).toHaveLength(2);
+
+    // First block is Try
+    const tryBlock = tcNode.blocks![0];
+    expect(tryBlock.data).toMatchObject({ __isBranch: true, title: 'Try' });
+    expect(tryBlock.blocks![0].id).toBe('try_action');
+
+    // Second block is Catch
+    const catchBlock = tcNode.blocks![1];
+    expect(catchBlock.data).toMatchObject({ __isBranch: true, title: 'Catch' });
+    expect(catchBlock.blocks![0].id).toBe('catch_action');
+
+    // Round-trip back to DSL
+    const output = flowDocumentToDsl(doc, input.chain_id, input.version);
+    for (const e of input.edges) {
+      expect(output.edges).toContainEqual(e);
+    }
+  });
+
+  it('fork with branches survives dsl→doc→dsl', () => {
+    const input: RuleChainDsl = {
+      chain_id: 'fork-test',
+      version: '1.0',
+      nodes: [
+        { id: 'start', type: 'start', config: {} },
+        { id: 'fork', type: 'fork', config: { join_at: 'join' } },
+        { id: 'branch1', type: 'delay', config: { duration_ms: 100 } },
+        { id: 'branch2', type: 'log_node', config: {} },
+        { id: 'join', type: 'join', config: {} },
+        { id: 'end', type: 'end', config: {} },
+      ],
+      edges: [
+        { from: 'start', to: 'fork' },
+        { from: 'fork', to: 'branch1' },
+        { from: 'fork', to: 'branch2' },
+        { from: 'branch1', to: 'join' },
+        { from: 'branch2', to: 'join' },
+        { from: 'join', to: 'end' },
+      ],
+      interceptors: [],
+    };
+
+    const doc = dslToFlowDocument(input);
+    const forkNode = doc.nodes.find((n) => n.id === 'fork')!;
+    expect(forkNode.type).toBe('dynamicSplit');
+    expect(forkNode.blocks).toHaveLength(2);
+
+    // Round-trip back to DSL
+    const output = flowDocumentToDsl(doc, input.chain_id, input.version);
+    for (const e of input.edges) {
+      expect(output.edges).toContainEqual(e);
+    }
+  });
+
+  it('switch config enrichment generates segments', () => {
+    // Switch with 2 case branches, the enrichment should set segments config
+    const docNodes: FlowNodeJSON[] = [
+      makeNode('start', 'start'),
+      {
+        id: 'switch',
+        type: 'dynamicSplit',
+        data: { ruleNodeType: 'switch', title: 'Switch', config: {} },
+        blocks: [
+          {
+            id: 'switch_branch_0',
+            type: 'block',
+            data: { ruleNodeType: '__branch__', title: 'Case 1', config: {}, __isBranch: true },
+            blocks: [makeNode('case1', 'case', { condition: 'a==1' }), makeNode('action1', 'delay')],
+          },
+          {
+            id: 'switch_branch_1',
+            type: 'block',
+            data: { ruleNodeType: '__branch__', title: 'Default', config: {}, __isBranch: true },
+            blocks: [makeNode('case2', 'case', { condition: '' })],
+          },
+        ],
+      } as FlowNodeJSON,
+      makeNode('join', 'join'),
+      makeNode('end', 'end'),
+    ];
+
+    // Need edges to define the flow past branches for conversion
+    const edges = [
+      { from: 'switch', to: 'case1' },
+      { from: 'switch', to: 'case2' },
+      { from: 'case1', to: 'action1' },
+      { from: 'action1', to: 'join' },
+      { from: 'case2', to: 'join' },
+      { from: 'join', to: 'end' },
+    ];
+
+    const result = flowDocumentToDsl({ nodes: docNodes }, 'test', '1.0');
+    const switchNode = result.nodes.find((n) => n.id === 'switch')!;
+    expect(switchNode.type).toBe('switch');
+    expect(switchNode.config.segments).toBeDefined();
+    expect(Array.isArray(switchNode.config.segments)).toBe(true);
   });
 });
