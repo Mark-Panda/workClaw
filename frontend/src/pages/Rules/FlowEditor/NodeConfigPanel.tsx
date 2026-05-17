@@ -1,4 +1,4 @@
-import { useState, useCallback, useContext, useEffect } from 'react';
+import { useState, useCallback, useContext, useEffect, useRef } from 'react';
 import { useClientContext } from '@flowgram.ai/fixed-layout-editor';
 import type { RuleNodeType } from './nodes';
 import { NODE_LABELS, NODE_COLORS, nodeIcon } from './nodes';
@@ -9,13 +9,13 @@ import { NodeSelectionContext } from './nodeSelection';
 interface FieldDef {
   name: string;
   label: string;
-  type: 'string' | 'number' | 'boolean' | 'json' | 'select';
+  type: 'string' | 'number' | 'boolean' | 'json' | 'select' | 'expr';
   options?: string[];
   required?: boolean;
 }
 
 const FIELD_DEFS: Partial<Record<RuleNodeType, FieldDef[]>> = {
-  condition: [{ name: 'expression', label: 'CEL 表达式', type: 'string', required: true }],
+  condition: [{ name: 'expression', label: '条件表达式 (Expr)', type: 'expr', required: true }],
   transform: [{ name: 'field_map', label: '字段映射', type: 'json' }],
   assign: [{ name: 'variables', label: '变量', type: 'json' }],
   delay: [{ name: 'duration_ms', label: '延迟 (ms)', type: 'number', required: true }],
@@ -42,6 +42,79 @@ const FIELD_DEFS: Partial<Record<RuleNodeType, FieldDef[]>> = {
     { name: 'max_iterations', label: '最大迭代次数', type: 'number' },
   ],
 };
+
+// ─── Expr 语言参考数据 ────────────────────────────────────────────
+
+const EXPR_OPERATORS: { group: string; items: { op: string; desc: string }[] }[] = [
+  {
+    group: '比较运算符',
+    items: [
+      { op: '==', desc: '等于' },
+      { op: '!=', desc: '不等于' },
+      { op: '<', desc: '小于' },
+      { op: '>', desc: '大于' },
+      { op: '<=', desc: '小于等于' },
+      { op: '>=', desc: '大于等于' },
+      { op: 'in', desc: '属于集合' },
+      { op: 'not in', desc: '不属于集合' },
+    ],
+  },
+  {
+    group: '逻辑运算符',
+    items: [
+      { op: 'and / &&', desc: '逻辑与' },
+      { op: 'or / ||', desc: '逻辑或' },
+      { op: 'not / !', desc: '逻辑非' },
+    ],
+  },
+  {
+    group: '字符串函数',
+    items: [
+      { op: 'contains(str, substr)', desc: '包含子串' },
+      { op: 'startsWith(str, prefix)', desc: '以前缀开头' },
+      { op: 'endsWith(str, suffix)', desc: '以后缀结尾' },
+      { op: 'matches(str, pattern)', desc: '正则匹配' },
+      { op: 'len(str)', desc: '字符串长度' },
+    ],
+  },
+  {
+    group: '数组/集合函数',
+    items: [
+      { op: 'all(collection, pred)', desc: '所有元素满足条件' },
+      { op: 'any(collection, pred)', desc: '任一元素满足条件' },
+      { op: 'one(collection, pred)', desc: '恰好一个元素满足' },
+      { op: 'none(collection, pred)', desc: '没有元素满足条件' },
+      { op: 'filter(collection, pred)', desc: '过滤集合' },
+      { op: 'map(collection, expr)', desc: '映射转换' },
+      { op: 'count(collection)', desc: '元素数量' },
+    ],
+  },
+  {
+    group: '其他',
+    items: [
+      { op: '??', desc: '空值合并 (nil coalescing)' },
+      { op: '? :', desc: '三元运算符' },
+      { op: '..', desc: '范围操作符' },
+      { op: '?', desc: '可选链 (optional chaining)' },
+      { op: '|', desc: '管道操作符' },
+    ],
+  },
+];
+
+const EXPR_TEMPLATES: { label: string; expr: string }[] = [
+  { label: '等于', expr: 'value == "expected"' },
+  { label: '不等于', expr: 'value != "expected"' },
+  { label: '数字比较', expr: 'value >= 100' },
+  { label: '且条件', expr: 'condition1 && condition2' },
+  { label: '或条件', expr: 'condition1 || condition2' },
+  { label: '包含', expr: 'contains(str, "substring")' },
+  { label: '正则匹配', expr: 'matches(str, "^pattern$")' },
+  { label: '属于集合', expr: 'value in ["a", "b", "c"]' },
+  { label: '非空', expr: 'value != nil && value != ""' },
+  { label: '三元', expr: 'age >= 18 ? "adult" : "minor"' },
+];
+
+// ─── 渲染样式 ────────────────────────────────────────────────────
 
 const inputStyle: React.CSSProperties = {
   width: '100%',
@@ -208,6 +281,12 @@ export default function NodeConfigPanel() {
                   此字段必填
                 </span>
               )}
+              {field.type === 'expr' && (
+                <ExprReferencePanel
+                  value={String(config[field.name] ?? '')}
+                  onChange={(val) => handleChange(field.name, val)}
+                />
+              )}
             </div>
           ))
         ) : (
@@ -323,6 +402,32 @@ function renderFieldInput(
     );
   }
 
+  if (field.type === 'expr') {
+    return (
+      <textarea
+        style={{
+          ...inputStyle,
+          minHeight: 120,
+          resize: 'vertical',
+          fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", monospace',
+          fontSize: 13,
+          lineHeight: 1.6,
+          background: '#1e1e2e',
+          color: '#cdd6f4',
+          padding: '10px 12px',
+          border: '1px solid #45475a',
+        }}
+        value={String(value ?? '')}
+        placeholder={field.required ? '输入 Expr 表达式...' : ''}
+        rows={6}
+        spellCheck={false}
+        onChange={(e) => onChange(field.name, e.target.value)}
+        onFocus={(e) => { e.target.style.borderColor = '#89b4fa'; }}
+        onBlur={(e) => { e.target.style.borderColor = '#45475a'; }}
+      />
+    );
+  }
+
   return (
     <input
       type="text"
@@ -333,5 +438,142 @@ function renderFieldInput(
       onFocus={(e) => { e.target.style.borderColor = '#3370ff'; }}
       onBlur={(e) => { e.target.style.borderColor = '#d9d9d9'; }}
     />
+  );
+}
+
+/** Collapsible Expr 语言参考面板：显示操作符分组和常用模板。 */
+function ExprReferencePanel({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (val: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const sectionHeader: React.CSSProperties = {
+    fontSize: 12,
+    fontWeight: 600,
+    color: '#374151',
+    cursor: 'pointer',
+    display: 'flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '6px 0',
+    userSelect: 'none',
+  };
+
+  const groupLabel: React.CSSProperties = {
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#6b7280',
+    marginTop: 8,
+    marginBottom: 4,
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px',
+  };
+
+  const chipStyle: React.CSSProperties = {
+    display: 'inline-block',
+    padding: '2px 6px',
+    fontSize: 11,
+    fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", monospace',
+    background: '#eef2ff',
+    color: '#4338ca',
+    borderRadius: 4,
+    marginRight: 4,
+    marginBottom: 4,
+  };
+
+  const descStyle: React.CSSProperties = {
+    fontSize: 11,
+    color: '#6b7280',
+    marginLeft: 4,
+  };
+
+  const templateBtnBase: React.CSSProperties = {
+    display: 'block',
+    width: '100%',
+    textAlign: 'left',
+    padding: '6px 8px',
+    fontSize: 12,
+    fontFamily: '"Fira Code", "Cascadia Code", "JetBrains Mono", monospace',
+    background: '#f9fafb',
+    border: '1px solid #e5e7eb',
+    borderRadius: 4,
+    cursor: 'pointer',
+    color: '#1f2937',
+    marginBottom: 4,
+    lineHeight: 1.5,
+  };
+
+  return (
+    <div style={{ marginTop: 8, borderTop: '1px solid #e5e7eb', paddingTop: 4 }}>
+      <div style={sectionHeader} onClick={() => setOpen(!open)}>
+        <span
+          style={{
+            display: 'inline-block',
+            transition: 'transform .2s',
+            transform: open ? 'rotate(90deg)' : 'rotate(0deg)',
+            fontSize: 10,
+            color: '#9ca3af',
+          }}
+        >
+          ▶
+        </span>
+        Expr 操作符参考
+      </div>
+
+      {open && (
+        <div style={{ padding: '4px 0 8px' }}>
+          {/* Operator groups */}
+          {EXPR_OPERATORS.map((group) => (
+            <div key={group.group}>
+              <div style={groupLabel}>{group.group}</div>
+              <div style={{ marginBottom: 6 }}>
+                {group.items.map((item) => (
+                  <span key={item.op}>
+                    <code style={chipStyle}>{item.op}</code>
+                    <span style={descStyle}>{item.desc}</span>
+                    <br />
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+
+          {/* Divider */}
+          <div style={{ height: 1, background: '#e5e7eb', margin: '8px 0' }} />
+
+          {/* Template buttons */}
+          <div style={{ fontSize: 11, fontWeight: 600, color: '#6b7280', marginBottom: 6 }}>
+            常用模板 — 点击替换当前表达式
+          </div>
+          {EXPR_TEMPLATES.map((tpl) => (
+            <button
+              key={tpl.label}
+              style={templateBtnBase}
+              onClick={() => onChange(tpl.expr)}
+              onMouseEnter={(e) => { e.currentTarget.style.background = '#f3f4f6'; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = '#f9fafb'; }}
+              title={tpl.expr}
+            >
+              <span
+                style={{
+                  color: '#6b7280',
+                  fontWeight: 500,
+                  marginRight: 6,
+                  fontFamily: 'inherit',
+                  fontSize: 11,
+                }}
+              >
+                {tpl.label}:
+              </span>
+              {tpl.expr}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

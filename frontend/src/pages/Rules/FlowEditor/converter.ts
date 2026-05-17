@@ -359,6 +359,12 @@ export function flowDocumentToDsl(
     }
   }
 
+  // ── Enrich node configs for backend compatibility ────────────
+  // Condition: set true_branch / false_branch from outgoing edges
+  // Loop: set body_start_id from first outgoing edge
+  // Fork: build segments array from branch groups
+  enrichNodeConfigs(nodes, edges, groups, owners);
+
   return {
     chain_id: chainId,
     version,
@@ -366,6 +372,65 @@ export function flowDocumentToDsl(
     edges,
     interceptors: [],
   };
+}
+
+/** Enrich node configs with structural info derived from the edge graph.
+ *  This ensures the flat DSL is compatible with the Rust backend's
+ *  expectations for condition, loop, and fork nodes. */
+function enrichNodeConfigs(
+  nodes: RuleNode[],
+  edges: RuleEdge[],
+  groups: Map<string, string[]>,
+  owners: Map<string, string>,
+): void {
+  const outgoingEdges = new Map<string, string[]>();
+  for (const e of edges) {
+    const list = outgoingEdges.get(e.from) ?? [];
+    list.push(e.to);
+    outgoingEdges.set(e.from, list);
+  }
+
+  for (const node of nodes) {
+    if (node.type === 'condition') {
+      const out = outgoingEdges.get(node.id) ?? [];
+      if (out.length >= 1) node.config.true_branch = out[0];
+      if (out.length >= 2) node.config.false_branch = out[1];
+    }
+
+    if (node.type === 'loop') {
+      const out = outgoingEdges.get(node.id) ?? [];
+      if (out.length >= 1) {
+        node.config.body_start_id = out[0];
+      }
+      // Walk the body chain to find flow_out_id (the node after the last body node)
+      let walk = out[0];
+      if (walk) {
+        for (let i = 0; i < 100; i++) {
+          const nextOut = outgoingEdges.get(walk) ?? [];
+          if (nextOut.length === 0) break;
+          walk = nextOut[0];
+        }
+        if (walk && walk !== out[0]) {
+          node.config.flow_out_id = walk;
+        }
+      }
+    }
+
+    if (node.type === 'fork') {
+      const segments: { start_id: string; end_id: string }[] = [];
+      for (const [gid, ids] of groups) {
+        if (owners.get(gid) === node.id && ids.length > 0) {
+          const lastNodeId = ids[ids.length - 1];
+          const lastOut = outgoingEdges.get(lastNodeId) ?? [];
+          const endId = lastOut[0] ?? '';
+          segments.push({ start_id: ids[0], end_id: endId });
+        }
+      }
+      if (segments.length > 0) {
+        node.config.segments = segments;
+      }
+    }
+  }
 }
 
 // ─── Helpers ────────────────────────────────────────────────────
@@ -431,7 +496,7 @@ function getDefaultConfig(type: RuleNodeType): Record<string, unknown> {
     rest_client: { method: 'POST', url: 'https://example.com/api', timeout_ms: 10000 },
     notification: { webhook_url: '', template: '' },
     subchain: { subchain_id: '', pass_context: true },
-    fork: { join_at: '' },
+    fork: { join_at: '', segments: [] },
     join: { merge_strategy: 'merge' },
     loop: { iterator_source: '', loop_var: 'item', max_iterations: 1000 },
   };

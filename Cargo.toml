@@ -27,7 +27,7 @@ futures = { version = "0.3", default-features = false }
 dashmap = "6"
 jsonwebtoken = "9"
 argon2 = "0.5"
-rhai = "1"
+rhai = { version = "1", features = ["sync"] }
 cel-interpreter = "0.7"
 rmcp = { version = "0.6", features = ["client", "transport-child-process"] }
 notify = { version = "8", default-features = false, features = ["macos_kqueue"] }
@@ -37,6 +37,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 serde_yaml = "0.9"
 async-openai = { version = "0.38", features = ["_api", "chat-completion-types", "chat-completion"] }
 claude-api = "0.5"
+regex = "1"
 
 [profile.release]
 opt-level = "z"

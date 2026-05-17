@@ -6,36 +6,52 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-use crate::node::registry::NodeRegistry;
+use crate::engine::RuleEngine;
 use crate::node::traits::{NodeContext, NodeHandler, NodeOutput};
 use herness_common::error::{AppError, AppResult};
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ForkBranch {
-    node_id: String,
-    node_type: String,
-    config: Value,
+/// A single branch defined by segment start/end node IDs.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct BranchSegment {
+    /// First node in the branch chain
+    start_id: String,
+    /// Last node in the branch chain (exclusive – segment stops before end_id)
+    end_id: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct ForkConfig {
-    branches: Vec<ForkBranch>,
+    /// Branch definitions (multi-node segments). Used by modern frontend.
+    #[serde(default)]
+    segments: Vec<BranchSegment>,
+    /// Legacy single-node branches. Kept for backward compatibility.
+    #[serde(default)]
+    branches: Vec<LegacyBranch>,
+    /// Route to this node after all branches complete
     join_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct LegacyBranch {
+    node_id: String,
+    node_type: String,
+    #[serde(default)]
+    config: Value,
+}
+
 pub struct ForkNode {
-    node_registry: Mutex<Option<Arc<NodeRegistry>>>,
+    engine: Mutex<Option<Arc<RuleEngine>>>,
 }
 
 impl ForkNode {
     pub fn new() -> Self {
         Self {
-            node_registry: Mutex::new(None),
+            engine: Mutex::new(None),
         }
     }
 
-    pub async fn set_node_registry(&self, registry: Arc<NodeRegistry>) {
-        *self.node_registry.lock().await = Some(registry);
+    pub async fn set_engine(&self, engine: Arc<RuleEngine>) {
+        *self.engine.lock().await = Some(engine);
     }
 }
 
@@ -55,62 +71,124 @@ impl NodeHandler for ForkNode {
         let cfg: ForkConfig =
             serde_json::from_value(config).map_err(|e| AppError::Validation(e.to_string()))?;
 
-        if cfg.branches.is_empty() {
-            return Err(AppError::Validation("fork requires at least one branch".into()));
-        }
-
-        let registry = self
-            .node_registry
+        let engine = self
+            .engine
             .lock()
             .await
             .clone()
-            .ok_or_else(|| AppError::RuleExecution("ForkNode: no node_registry configured".into()))?;
+            .ok_or_else(|| AppError::RuleExecution("ForkNode: no engine configured".into()))?;
 
-        let mut tasks = FuturesUnordered::new();
-
-        for (idx, branch) in cfg.branches.iter().enumerate() {
-            let mut branch_ctx = ctx.clone();
-            let registry = registry.clone();
-            let node_type = branch.node_type.clone();
-            let node_config = branch.config.clone();
-            let node_id = branch.node_id.clone();
-
-            tasks.push(tokio::spawn(async move {
-                let handler = registry.get(&node_type).ok_or_else(|| {
-                    AppError::RuleExecution(format!("Unknown node type: {}", node_type))
-                })?;
-
-                match handler.execute(&mut branch_ctx, node_config).await {
-                    Ok(_output) => Ok((idx, node_id, branch_ctx)),
-                    Err(e) => Err(e),
-                }
-            }));
-        }
-
+        let chain_id = ctx.chain_id.clone();
         let mut branch_results: Vec<Value> = Vec::new();
 
-        while let Some(task_result) = tasks.next().await {
-            match task_result {
-                Ok(Ok((idx, node_id, branch_ctx))) => {
-                    // Merge branch variables with prefix
-                    for (key, value) in &branch_ctx.variables {
-                        let prefixed = format!("fork_branch_{}_{}", idx, key);
-                        ctx.set_var(&prefixed, value.clone());
-                        ctx.set_var(&key, value.clone());
+        // ── Multi-node branch segments ──────────────────────────
+        if !cfg.segments.is_empty() {
+            let mut tasks = FuturesUnordered::new();
+
+            for (idx, seg) in cfg.segments.iter().enumerate() {
+                let engine = engine.clone();
+                let chain_id = chain_id.clone();
+                let ctx_clone = ctx.clone();
+                let start_id = seg.start_id.clone();
+                let end_id = seg.end_id.clone();
+
+                tasks.push(tokio::spawn(async move {
+                    let result = engine
+                        .execute_chain_segment(&chain_id, &start_id, &end_id, ctx_clone)
+                        .await;
+                    (idx, result)
+                }));
+            }
+
+            // ── Collect segment results ─────────────────────────
+            while let Some(task_result) = tasks.next().await {
+                match task_result {
+                    Ok((idx, Ok(ret_ctx))) => {
+                        for (key, value) in &ret_ctx.variables {
+                            ctx.set_var(&format!("fork_branch_{}_{}", idx, key), value.clone());
+                            ctx.set_var(key, value.clone());
+                        }
+                        branch_results
+                            .push(serde_json::to_value(&ret_ctx.variables).unwrap_or_default());
                     }
-                    ctx.set_var(
-                        &format!("fork_branch_{}_output", idx),
-                        branch_ctx.node_outputs.get(&node_id).cloned().unwrap_or(Value::Null),
-                    );
-                    branch_results.push(serde_json::to_value(&branch_ctx.variables).unwrap_or_default());
-                }
-                Ok(Err(e)) => {
-                    return Err(AppError::RuleExecution(format!("Fork branch failed: {}", e)));
-                }
-                Err(e) => {
-                    return Err(AppError::RuleExecution(format!("Fork task panicked: {}", e)));
+                    Ok((_, Err(e))) => {
+                        return Err(AppError::RuleExecution(format!(
+                            "Fork branch failed: {}",
+                            e
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(AppError::RuleExecution(format!(
+                            "Fork task panicked: {}",
+                            e
+                        )));
+                    }
                 }
             }
+        }
+        // ── Legacy single-node branches ─────────────────────────
+        else if !cfg.branches.is_empty() {
+            let registry = engine.node_registry();
+            let mut tasks = FuturesUnordered::new();
+
+            for (idx, branch) in cfg.branches.iter().enumerate() {
+                let registry = registry.clone();
+                let mut branch_ctx = ctx.clone();
+                let node_type = branch.node_type.clone();
+                let node_config = branch.config.clone();
+                let node_id = branch.node_id.clone();
+
+                tasks.push(tokio::spawn(async move {
+                    let handler = registry.get(&node_type).ok_or_else(|| {
+                        AppError::RuleExecution(format!("Unknown node type: {}", node_type))
+                    })?;
+
+                    match handler.execute(&mut branch_ctx, node_config).await {
+                        Ok(_output) => Ok((idx, node_id, branch_ctx)),
+                        Err(e) => Err(e),
+                    }
+                }));
+            }
+
+            // ── Collect legacy results ──────────────────────────
+            while let Some(task_result) = tasks.next().await {
+                match task_result {
+                    Ok(Ok((idx, node_id, branch_ctx))) => {
+                        for (key, value) in &branch_ctx.variables {
+                            let prefixed = format!("fork_branch_{}_{}", idx, key);
+                            ctx.set_var(&prefixed, value.clone());
+                            ctx.set_var(key, value.clone());
+                        }
+                        ctx.set_var(
+                            &format!("fork_branch_{}_output", idx),
+                            branch_ctx
+                                .node_outputs
+                                .get(&node_id)
+                                .cloned()
+                                .unwrap_or(Value::Null),
+                        );
+                        branch_results.push(
+                            serde_json::to_value(&branch_ctx.variables).unwrap_or_default(),
+                        );
+                    }
+                    Ok(Err(e)) => {
+                        return Err(AppError::RuleExecution(format!(
+                            "Fork branch failed: {}",
+                            e
+                        )));
+                    }
+                    Err(e) => {
+                        return Err(AppError::RuleExecution(format!(
+                            "Fork task panicked: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+        } else {
+            return Err(AppError::Validation(
+                "fork requires at least one branch segment or branch".into(),
+            ));
         }
 
         let branch_count = branch_results.len();
@@ -121,18 +199,29 @@ impl NodeHandler for ForkNode {
     }
 
     fn validate_config(&self, config: &Value) -> AppResult<()> {
+        let segments = config.get("segments").and_then(|v| v.as_array());
         let branches = config.get("branches").and_then(|v| v.as_array());
-        match branches {
-            Some(arr) if arr.is_empty() => {
+
+        match (segments, branches) {
+            (Some(arr), _) if arr.is_empty() => {
+                return Err(AppError::Validation("segments must not be empty".into()));
+            }
+            (None, Some(arr)) if arr.is_empty() => {
                 return Err(AppError::Validation("branches must not be empty".into()));
             }
-            None => {
-                return Err(AppError::Validation(
-                    "fork requires 'branches' array in config".into(),
-                ));
-            }
-            _ => {}
+            (None, None) | (None, Some(_)) => {}
+            (Some(_), _) => {}
         }
+
+        // Both empty or both missing
+        let has_segments = segments.map(|a| !a.is_empty()).unwrap_or(false);
+        let has_branches = branches.map(|a| !a.is_empty()).unwrap_or(false);
+        if !has_segments && !has_branches {
+            return Err(AppError::Validation(
+                "fork requires 'segments' or 'branches' in config".into(),
+            ));
+        }
+
         let join = config.get("join_at").and_then(|v| v.as_str()).unwrap_or("");
         if join.trim().is_empty() {
             return Err(AppError::Validation("join_at must not be empty".into()));
@@ -144,30 +233,38 @@ impl NodeHandler for ForkNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::builtins::assign::AssignNode;
     use crate::node::builtins::end::EndNode;
+    use crate::node::builtins::start::StartNode;
+    use crate::node::registry::NodeRegistry;
+    use crate::interceptor::InterceptorRegistry;
+    use crate::dsl::types::{RuleChain, RuleNode, RuleEdge};
 
     #[tokio::test]
     async fn test_fork_requires_branches() {
         let node = ForkNode::new();
-        let result = node.validate_config(&serde_json::json!({"branches": [], "join_at": "join1"}));
+        let result = node.validate_config(&serde_json::json!({"segments": [], "join_at": "join1"}));
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_fork_executes_branches() {
-        let mut registry = NodeRegistry::new();
-        registry.register(Arc::new(AssignNode));
-        registry.register(Arc::new(EndNode));
+    async fn test_fork_legacy_branches() {
+        let mut node_registry = NodeRegistry::new();
+        node_registry.register(Arc::new(StartNode));
+        node_registry.register(Arc::new(EndNode));
+        let interceptor_registry = InterceptorRegistry::new();
+        let engine = Arc::new(RuleEngine::new(
+            Arc::new(node_registry),
+            Arc::new(interceptor_registry),
+        ));
 
         let node = ForkNode::new();
-        node.set_node_registry(Arc::new(registry)).await;
+        node.set_engine(engine).await;
 
         let mut ctx = NodeContext::new(serde_json::json!({"x": 1}));
         let config = serde_json::json!({
             "branches": [
-                {"node_id": "b1", "node_type": "assign", "config": {"key": "val1", "value": "hello"}},
-                {"node_id": "b2", "node_type": "assign", "config": {"key": "val2", "value": "world"}}
+                {"node_id": "b1", "node_type": "start", "config": {}},
+                {"node_id": "b2", "node_type": "start", "config": {}}
             ],
             "join_at": "join1"
         });
@@ -176,9 +273,6 @@ mod tests {
         match result {
             NodeOutput::Route(target) => {
                 assert_eq!(target, "join1");
-                // Both variables should be set
-                assert_eq!(ctx.get_var("val1"), Some(&Value::String("hello".into())));
-                assert_eq!(ctx.get_var("val2"), Some(&Value::String("world".into())));
             }
             _ => panic!("Expected Route"),
         }

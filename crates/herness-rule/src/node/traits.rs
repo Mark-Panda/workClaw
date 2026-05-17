@@ -12,6 +12,10 @@ pub struct NodeContext {
     pub node_outputs: HashMap<String, Value>,
     /// The original input to the rule chain
     pub input: Value,
+    /// Current chain ID (set by engine before executing each node)
+    pub chain_id: String,
+    /// Current node ID (set by engine before executing this node)
+    pub current_node_id: String,
 }
 
 impl NodeContext {
@@ -20,6 +24,8 @@ impl NodeContext {
             variables: HashMap::new(),
             node_outputs: HashMap::new(),
             input,
+            chain_id: String::new(),
+            current_node_id: String::new(),
         }
     }
 

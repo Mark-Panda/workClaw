@@ -82,7 +82,12 @@ impl RuleEngine {
                 AppError::RuleExecution(format!("Unknown node type: {}", current.node_type))
             })?;
 
-            let mut node_ctx: crate::node::traits::NodeContext = ctx.clone().into();
+            let mut node_ctx: crate::node::traits::NodeContext = {
+                let mut nctx: crate::node::traits::NodeContext = ctx.clone().into();
+                nctx.chain_id = chain_id.to_string();
+                nctx.current_node_id = current.id.clone();
+                nctx
+            };
             let result = handler.execute(&mut node_ctx, current.config.clone()).await;
 
             // Sync node_ctx back to ctx
@@ -129,6 +134,62 @@ impl RuleEngine {
         }
 
         Ok(ctx.output.unwrap_or(Value::Null))
+    }
+
+    /// Execute a segment of a chain from `start_node_id` to `end_node_id` (exclusive).
+    /// Returns the final NodeContext after executing all nodes in the segment.
+    /// This is used by LoopNode and ForkNode to execute body branches.
+    pub async fn execute_chain_segment(
+        &self,
+        chain_id: &str,
+        start_node_id: &str,
+        end_node_id: &str,
+        mut ctx: crate::node::traits::NodeContext,
+    ) -> AppResult<crate::node::traits::NodeContext> {
+        let chain = self
+            .get_chain(chain_id)
+            .ok_or_else(|| AppError::NotFound(format!("Rule chain not found: {}", chain_id)))?;
+
+        let mut current_id = start_node_id.to_string();
+        loop {
+            let current = match chain.find_node(&current_id) {
+                Some(n) => n,
+                None => break,
+            };
+
+            let handler = self.node_registry.get(&current.node_type).ok_or_else(|| {
+                AppError::RuleExecution(format!("Unknown node type: {}", current.node_type))
+            })?;
+
+            ctx.chain_id = chain_id.to_string();
+            ctx.current_node_id = current.id.clone();
+
+            let result = handler.execute(&mut ctx, current.config.clone()).await?;
+
+            match result {
+                NodeOutput::Continue => {
+                    match chain.next_node(&current_id) {
+                        Some(next) => {
+                            if next.id == end_node_id || next.node_type == "end" {
+                                break;
+                            }
+                            current_id = next.id.clone();
+                        }
+                        None => break,
+                    }
+                }
+                NodeOutput::Route(target) => {
+                    if target == end_node_id {
+                        break;
+                    }
+                    // If routing to a node past end_node, stop
+                    current_id = target;
+                }
+                NodeOutput::Stop => break,
+            }
+        }
+
+        Ok(ctx)
     }
 }
 

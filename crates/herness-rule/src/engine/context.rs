@@ -38,6 +38,8 @@ impl From<ExecutionContext> for crate::node::traits::NodeContext {
             variables: val.variables,
             node_outputs: val.node_outputs,
             input: val.input,
+            chain_id: String::new(),
+            current_node_id: String::new(),
         }
     }
 }

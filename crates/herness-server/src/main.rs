@@ -46,8 +46,8 @@ async fn main() -> anyhow::Result<()> {
         interceptor_registry,
     ));
 
-    // Wire engine/registry into nodes that need it
-    fork_node.set_node_registry(node_registry).await;
+    // Wire engine into nodes that need it
+    fork_node.set_engine(rule_engine.clone()).await;
     subchain_node.set_engine(rule_engine.clone()).await;
     loop_node.set_engine(rule_engine.clone()).await;
 
