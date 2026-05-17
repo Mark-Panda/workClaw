@@ -184,18 +184,24 @@ export function flowDocumentToDsl(
     const blocks = node.blocks ?? [];
     for (const block of blocks) {
       if (data?.__isBranch) {
-        // Branch wrapper — its children belong to the SAME group
+        // (1) This node IS a branch wrapper — children stay in the SAME group.
+        //     FlowGram inlines the children directly (no wrapping block).
         for (const child of block.blocks ?? []) {
           walk(child, group, owner);
         }
-      } else {
-        // Owner (e.g. dynamicSplit) — each child block is a NEW group
+      } else if (block.data?.__isBranch || block.type === 'block') {
+        // (2) Block is a branch wrapper inside an owner (e.g. fork/dynamicSplit).
+        //     Each branch wrapper's children form a NEW group with the owner
+        //     connecting to the first child.
         for (const child of block.blocks ?? []) {
-          const childGroup = child.id || `${node.id}_block`;
-          for (const grandchild of child.blocks ?? []) {
-            walk(grandchild, childGroup, node.id);
-          }
+          walk(child, block.id, node.id);
         }
+      } else {
+        // (3) Block is a direct child node — walk it immediately.
+        //     This handles cases where FlowGram's toJSON() nests children
+        //     inside a non-fork node's blocks (e.g., loop's children are
+        //     placed in loop's blocks by toJSON due to FlowGram's entity tree).
+        walk(block, group, node.id);
       }
     }
   }

@@ -6,6 +6,7 @@ import {
   usePlayground,
   useRefresh,
   type FixedLayoutPluginContext,
+  type FlowNodeJSON,
   type FlowNodeType,
   FlowRendererKey,
 } from '@flowgram.ai/fixed-layout-editor';
@@ -19,6 +20,21 @@ import { NotifyContext } from './context';
 import NodeAdder from './NodeAdder';
 import DefaultRuleNode from './DefaultRuleNode';
 import CustomCollapse from './Collapse';
+
+/** Walk FlowGram's tree and collect all real (non-branch) node IDs. */
+function collectCanvasNodeIds(nodes: FlowNodeJSON[]): Set<string> {
+  const ids = new Set<string>();
+  function walk(list: FlowNodeJSON[]): void {
+    for (const n of list) {
+      if (n.id && !(n.data as Record<string, unknown> | undefined)?.__isBranch) {
+        ids.add(n.id);
+      }
+      walk(n.blocks ?? []);
+    }
+  }
+  walk(nodes);
+  return ids;
+}
 
 interface Props {
   dsl: RuleChainDsl;
@@ -53,6 +69,11 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
     [registries],
   );
 
+  // Latest canvas DSL snapshot — updated by notifyChange and used in JSON mode.
+  // This ensures the JSON textarea always reflects the actual canvas state,
+  // independent of the dsl prop (which can be stale).
+  const canvasDslRef = useRef(dsl);
+
   const notifyChange = useCallback(() => {
     const ctx = editorRef.current;
     if (!ctx || ctx.document.disposed) return;
@@ -60,6 +81,21 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
       const docJson: FlowDocumentJSON = ctx.document.toJSON();
       const prevDsl = dslRef.current;
       const newDsl = flowDocumentToDsl(docJson, prevDsl.chain_id, prevDsl.version);
+
+      // Collect all node IDs present in the live canvas (docJson).
+      // If a node is in the canvas but the converter missed it, we restore it
+      // from prevDsl. This guards against converter bugs or timing issues where
+      // a node was added to the canvas but not yet reflected in toJSON()/converter.
+      const canvasIds = collectCanvasNodeIds((docJson as FlowDocumentJSON).nodes ?? []);
+      const prevNodeMap = new Map(prevDsl.nodes.map((n) => [n.id, n]));
+      const newNodeIds = new Set(newDsl.nodes.map((n) => n.id));
+
+      for (const id of canvasIds) {
+        if (!newNodeIds.has(id) && prevNodeMap.has(id)) {
+          newDsl.nodes.push(prevNodeMap.get(id)!);
+          newNodeIds.add(id);
+        }
+      }
 
       // Preserve edges that flat sibling ordering cannot represent
       // (e.g. loop→end as a second outgoing edge, rest_client→loop as a back-edge).
@@ -77,6 +113,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
         }
       }
 
+      canvasDslRef.current = newDsl;
       onChangeRef.current(newDsl);
     } catch {
       // Ignore conversion errors
@@ -95,9 +132,9 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
     [notifyChange],
   );
 
-  // In JSON mode, render a textarea instead of the canvas.
-  // Use `key` to force a fresh mount when the DSL changes while staying in JSON mode,
-  // ensuring the textarea always reflects the latest state.
+  // In JSON mode, render a textarea. Read from canvasDslRef which is kept in sync
+  // with the live canvas state by notifyChange — this ensures nodes added in the
+  // canvas (like rest_client inside a loop) always appear in the JSON output.
   if (viewMode === 'json') {
     return (
       <div
@@ -106,7 +143,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
         key={viewMode}
       >
         <textarea
-          defaultValue={JSON.stringify(dsl, null, 2)}
+          defaultValue={JSON.stringify(canvasDslRef.current, null, 2)}
           onChange={(e) => {
             try {
               const parsed = JSON.parse(e.target.value);
