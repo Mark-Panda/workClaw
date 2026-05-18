@@ -20,6 +20,10 @@ impl NodeRegistry {
             .insert(handler.node_type().to_string(), handler);
     }
 
+    pub fn register_with_type(&mut self, node_type: &str, handler: Arc<dyn NodeHandler>) {
+        self.handlers.insert(node_type.to_string(), handler);
+    }
+
     pub fn get(&self, node_type: &str) -> Option<&Arc<dyn NodeHandler>> {
         self.handlers.get(node_type)
     }

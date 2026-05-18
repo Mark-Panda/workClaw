@@ -1,4 +1,5 @@
 export {
+  BRANCH_MARKER_TYPES,
   buildRegistries,
   createNodeJSON,
   getNodeFlowType,

@@ -7,14 +7,10 @@ use herness_rule::interceptor::builtins::validation::ValidationInterceptor;
 use herness_rule::interceptor::InterceptorRegistry;
 use herness_rule::node::builtins::assign::AssignNode;
 use herness_rule::node::builtins::break_loop::BreakLoopNode;
-use herness_rule::node::builtins::case::CaseNode;
-use herness_rule::node::builtins::catch_block::CatchBlock;
 use herness_rule::node::builtins::condition::ConditionNode;
 use herness_rule::node::builtins::delay::DelayNode;
 use herness_rule::node::builtins::end::EndNode;
 use herness_rule::node::builtins::fork::ForkNode;
-use herness_rule::node::builtins::if_block::IfBlock;
-use herness_rule::node::builtins::if_node::IfNode;
 use herness_rule::node::builtins::join::JoinNode;
 use herness_rule::node::builtins::llm::LlmNode;
 use herness_rule::node::builtins::log_node::LogNode;
@@ -90,7 +86,9 @@ fn build_node_registry() -> (
     // Nodes that don't need engine reference
     registry.register(Arc::new(StartNode));
     registry.register(Arc::new(EndNode));
-    registry.register(Arc::new(ConditionNode));
+    let condition_node = Arc::new(ConditionNode);
+    registry.register(condition_node.clone());
+    registry.register_with_type("if", condition_node);
     registry.register(Arc::new(TransformNode));
     registry.register(Arc::new(DelayNode));
     registry.register(Arc::new(AssignNode));
@@ -100,10 +98,6 @@ fn build_node_registry() -> (
     registry.register(Arc::new(NotificationNode));
     registry.register(Arc::new(JoinNode));
     registry.register(Arc::new(BreakLoopNode));
-    registry.register(Arc::new(CaseNode));
-    registry.register(Arc::new(CatchBlock));
-    registry.register(Arc::new(IfBlock));
-    registry.register(Arc::new(IfNode));
     registry.register(Arc::new(LlmNode));
 
     // Nodes that need engine/registry reference — keep Arcs to wire up later

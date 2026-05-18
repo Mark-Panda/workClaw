@@ -3,6 +3,13 @@ import type { FixedLayoutPluginContext, FlowNodeEntity, FlowNodeJSON } from '@fl
 /**
  * DSL-level rule node types (used in the JSON DSL, API, and user-facing labels).
  * These are the "source of truth" for rule chain node kinds.
+ *
+ * Architecture note: case/case_default/if_block/try_block/catch_block are
+ * UI-only branch marker types. They exist on the canvas as visual containers
+ * for branch blocks inside switch/if/try_catch, but they are NOT separate
+ * backend node types — the backend has no CaseNode, IfBlock, or CatchBlock.
+ * The converter (flowDocumentToDsl) skips them and stores their data
+ * (conditions, error info) inline in the parent node's config.
  */
 export const RULE_NODE_TYPES = [
   'start', 'end',
@@ -17,6 +24,11 @@ export const RULE_NODE_TYPES = [
 ] as const;
 
 export type RuleNodeType = (typeof RULE_NODE_TYPES)[number];
+
+/** Branch marker types — visual-only on canvas, no backend node handler. */
+export const BRANCH_MARKER_TYPES = new Set<string>([
+  'case', 'case_default', 'if_block', 'try_block', 'catch_block', '__branch__',
+]);
 
 /**
  * FlowGram reserves several type names as FlowNodeBaseType enum values
@@ -90,13 +102,13 @@ export const NODE_DESCRIPTIONS: Record<string, string> = {
   join: '合并并行分支结果',
   loop: '遍历数组迭代执行',
   switch: '根据条件路由到多个分支',
-  case: 'Switch 的一个条件分支',
+  case: 'Switch 的条件分支标记',
   case_default: 'Switch 的默认分支',
   if: '条件判断，分为真/假两个分支',
-  if_block: 'If 的分支块',
+  if_block: 'If 的分支块标记',
   try_catch: '异常捕获与处理',
-  try_block: 'Try 执行块',
-  catch_block: '异常捕获处理块',
+  try_block: 'Try 执行块标记',
+  catch_block: 'Catch 处理块标记',
   break_loop: '跳出当前循环',
   llm: '调用大语言模型生成响应',
 };
@@ -141,14 +153,14 @@ function defaultConfig(type: string): Record<string, unknown> {
     join: { merge_strategy: 'merge' },
     loop: { iterator_source: '', loop_var: 'item', max_iterations: 1000 },
     llm: { model: '', prompt: '', temperature: 0.7, max_tokens: 1024 },
-    switch: {},
+    switch: { branches: [] },
+    if: { expression: 'true' },
+    try_catch: {},
     case: { condition: '' },
     case_default: {},
-    if: {},
     if_block: {},
-    try_catch: {},
     try_block: {},
-    catch_block: { error_type: '' },
+    catch_block: {},
     break_loop: {},
   };
   return m[type] ?? {};
@@ -190,7 +202,7 @@ export function createNodeJSON(type: string, _from: FlowNodeEntity): FlowNodeJSO
   } else if (type === 'try_catch') {
     base.blocks = [
       { id: `${id}_try`, data: { ruleNodeType: 'try_block', title: 'Try', config: {}, __isBranch: true } as any, blocks: [] },
-      { id: `${id}_catch`, data: { ruleNodeType: 'catch_block', title: 'Catch', config: { error_type: '' }, __isBranch: true } as any, blocks: [] },
+      { id: `${id}_catch`, data: { ruleNodeType: 'catch_block', title: 'Catch', config: {}, __isBranch: true } as any, blocks: [] },
     ];
   }
 
@@ -202,7 +214,7 @@ export function makeRegistry(type: string): RuleNodeRegistry {
   const flowType = getNodeFlowType(type);
 
   const isContainer = type === 'switch' || type === 'if' || type === 'try_catch';
-  const isBlock = type === 'case' || type === 'case_default' || type === 'if_block' || type === 'try_block' || type === 'catch_block';
+  const isBlock = BRANCH_MARKER_TYPES.has(type);
 
   const meta: Record<string, unknown> = {
     size: { width: isBlock ? 140 : 160, height: isBlock ? 28 : 48 },
@@ -226,10 +238,6 @@ export function makeRegistry(type: string): RuleNodeRegistry {
     },
     canAdd(_ctx, _from) {
       if (isBlock) return false;
-      if (type === 'break_loop') {
-        // Only addable inside a loop container
-        return true;
-      }
       return true;
     },
     canDelete(_ctx, _from) {
@@ -261,8 +269,9 @@ function buildFormMeta(type: string): Record<string, unknown> | undefined {
     loop: { root: { name: 'config', type: 'object', title: '循环', children: [{ name: 'iterator_source', type: 'string', title: '遍历源', default: '', required: true }, { name: 'loop_var', type: 'string', title: '循环变量', default: 'item' }, { name: 'max_iterations', type: 'number', title: '最大迭代次数', default: 1000 }] } },
     llm: { root: { name: 'config', type: 'object', title: 'LLM 调用', children: [{ name: 'model', type: 'string', title: '模型', default: '', required: true }, { name: 'prompt', type: 'string', title: '提示词', default: '', required: true }, { name: 'temperature', type: 'number', title: '温度', default: 0.7 }, { name: 'max_tokens', type: 'number', title: '最大 Token', default: 1024 }] } },
     switch: { root: { name: 'config', type: 'object', title: 'Switch', children: [] } },
-    if: { root: { name: 'config', type: 'object', title: 'If', children: [] } },
+    if: { root: { name: 'config', type: 'object', title: 'If', children: [{ name: 'expression', type: 'string', title: '表达式', default: 'true', required: true }] } },
     try_catch: { root: { name: 'config', type: 'object', title: '异常处理', children: [] } },
+    case: { root: { name: 'config', type: 'object', title: 'Case 条件', children: [{ name: 'condition', type: 'string', title: '条件表达式', default: '' }] } },
   };
   return formMetas[type];
 }

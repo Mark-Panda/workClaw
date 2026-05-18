@@ -16,6 +16,9 @@ interface FieldDef {
 
 const FIELD_DEFS: Partial<Record<RuleNodeType, FieldDef[]>> = {
   condition: [{ name: 'expression', label: '条件表达式 (Expr)', type: 'expr', required: true }],
+  if: [{ name: 'expression', label: '条件表达式 (Expr)', type: 'expr', required: true }],
+  switch: [{ name: 'join_at', label: '合并节点 ID', type: 'string', required: true }],
+  case: [{ name: 'condition', label: '条件表达式', type: 'expr' }],
   transform: [{ name: 'field_map', label: '字段映射', type: 'json' }],
   assign: [{ name: 'variables', label: '变量', type: 'json' }],
   delay: [{ name: 'duration_ms', label: '延迟 (ms)', type: 'number', required: true }],
@@ -41,6 +44,20 @@ const FIELD_DEFS: Partial<Record<RuleNodeType, FieldDef[]>> = {
     { name: 'loop_var', label: '循环变量', type: 'string', required: true },
     { name: 'max_iterations', label: '最大迭代次数', type: 'number' },
   ],
+  llm: [
+    { name: 'model', label: '模型', type: 'string', required: true },
+    { name: 'prompt', label: '提示词', type: 'string', required: true },
+    { name: 'temperature', label: '温度', type: 'number' },
+    { name: 'max_tokens', label: '最大 Token', type: 'number' },
+  ],
+  break_loop: [],
+  try_catch: [],
+  if_block: [],
+  try_block: [],
+  catch_block: [],
+  case_default: [],
+  start: [],
+  end: [],
 };
 
 // ─── Expr 语言参考数据 ────────────────────────────────────────────

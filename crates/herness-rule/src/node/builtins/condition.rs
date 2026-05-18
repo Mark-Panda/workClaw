@@ -7,14 +7,15 @@ use std::sync::OnceLock;
 use crate::node::traits::{NodeContext, NodeHandler, NodeOutput};
 use herness_common::error::{AppError, AppResult};
 
-/// Expr-compatible condition configuration.
-/// `true_branch` / `false_branch` are optional — if absent the node
-/// returns Continue (true) or Stop (false) respectively.
+/// Condition node configuration — evaluates a Rhai expression and routes accordingly.
 #[derive(Debug, Serialize, Deserialize)]
 struct ConditionConfig {
+    /// Rhai expression to evaluate
     expression: String,
+    /// Node ID for the true branch
     #[serde(default)]
     true_branch: Option<String>,
+    /// Node ID for the false branch
     #[serde(default)]
     false_branch: Option<String>,
 }
@@ -30,6 +31,11 @@ impl NodeHandler for ConditionNode {
     async fn execute(&self, ctx: &mut NodeContext, config: Value) -> AppResult<NodeOutput> {
         let cfg: ConditionConfig =
             serde_json::from_value(config).map_err(|e| AppError::Validation(e.to_string()))?;
+
+        // Empty expression = passthrough
+        if cfg.expression.trim().is_empty() {
+            return Ok(NodeOutput::Continue);
+        }
 
         let result = evaluate_expr(&cfg.expression, ctx)?;
 
@@ -52,24 +58,23 @@ impl NodeHandler for ConditionNode {
             .and_then(|v| v.as_str())
             .unwrap_or("");
         if expr.trim().is_empty() {
-            return Err(AppError::Validation("expression must not be empty".into()));
+            return Ok(()); // No expression = passthrough
         }
-        // Try compiling the expression via rhai
         let engine = get_engine();
         engine
             .compile_expression(expr)
-            .map_err(|e| AppError::Validation(format!("Expr compile error: {}", e)))?;
+            .map_err(|e| AppError::Validation(format!("Condition expression compile error: {}", e)))?;
         Ok(())
     }
 }
 
-/// Get or create a lazy-initialized Rhai engine with registered custom functions.
+/// Get or create a lazy-initialized Rhai engine with all registered custom functions.
 fn get_engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
     ENGINE.get_or_init(|| {
         let mut engine = Engine::new();
 
-        // contains(str, substr) — string contains substring
+        // contains(str, substr)
         engine.register_fn("contains", |s: String, sub: String| s.contains(&sub));
 
         // startsWith(str, prefix)
@@ -99,7 +104,7 @@ fn get_engine() -> &'static Engine {
         // len(str) — string length
         engine.register_fn("len", |s: String| -> rhai::INT { s.len() as rhai::INT });
 
-        // count(collection) — element count (uses rhai arrays)
+        // count(collection) — element count
         engine.register_fn(
             "count",
             |arr: rhai::Dynamic| -> rhai::INT {
@@ -139,32 +144,27 @@ fn get_engine() -> &'static Engine {
     })
 }
 
-/// Evaluate an Expr-compatible expression using Rhai.
 fn evaluate_expr(expr: &str, ctx: &NodeContext) -> AppResult<bool> {
     let engine = get_engine();
     let mut scope = Scope::new();
 
-    // Push context variables into scope
     for (key, value) in &ctx.variables {
         if let Some(rv) = serde_to_rhai(value) {
             scope.push(key.as_str(), rv);
         }
     }
 
-    // Push input variable
     if let Some(rv) = serde_to_rhai(&ctx.input) {
         scope.push("input", rv);
     }
 
-    // Evaluate expression as boolean
     let result: bool = engine
         .eval_expression_with_scope(&mut scope, expr)
-        .map_err(|e| AppError::RuleExecution(format!("Expr eval error: {}", e)))?;
+        .map_err(|e| AppError::RuleExecution(format!("Condition eval error: {}", e)))?;
 
     Ok(result)
 }
 
-/// Convert a serde_json::Value to a Rhai Dynamic value.
 fn serde_to_rhai(value: &Value) -> Option<rhai::Dynamic> {
     match value {
         Value::Null => None,
@@ -232,23 +232,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_condition_with_variable() {
-        let node = ConditionNode;
-        let mut ctx = NodeContext::new(Value::Null);
-        ctx.set_var("x", serde_json::json!(10));
-        let config = serde_json::json!({
-            "expression": "x > 5",
-            "true_branch": "a",
-            "false_branch": "b"
-        });
-        let result = node.execute(&mut ctx, config).await.unwrap();
-        match result {
-            NodeOutput::Route(target) => assert_eq!(target, "a"),
-            _ => panic!("Expected Route"),
-        }
-    }
-
-    #[tokio::test]
     async fn test_condition_continue_when_true_no_branch() {
         let node = ConditionNode;
         let mut ctx = NodeContext::new(Value::Null);
@@ -268,6 +251,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_condition_with_variable() {
+        let node = ConditionNode;
+        let mut ctx = NodeContext::new(Value::Null);
+        ctx.set_var("x", serde_json::json!(10));
+        let config = serde_json::json!({
+            "expression": "x > 5",
+            "true_branch": "a",
+            "false_branch": "b"
+        });
+        let result = node.execute(&mut ctx, config).await.unwrap();
+        match result {
+            NodeOutput::Route(target) => assert_eq!(target, "a"),
+            _ => panic!("Expected Route"),
+        }
+    }
+
+    #[tokio::test]
     async fn test_expr_string_contains() {
         let node = ConditionNode;
         let mut ctx = NodeContext::new(Value::Null);
@@ -284,9 +284,51 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_validate_empty_expr() {
+    async fn test_expr_matches_regex() {
+        let node = ConditionNode;
+        let mut ctx = NodeContext::new(Value::Null);
+        ctx.set_var("email", serde_json::json!("user@example.com"));
+        let config = serde_json::json!({
+            "expression": "matches(email, \".*@.*\\\\.com\")",
+            "true_branch": "valid",
+        });
+        let result = node.execute(&mut ctx, config).await.unwrap();
+        match result {
+            NodeOutput::Route(target) => assert_eq!(target, "valid"),
+            _ => panic!("Expected Route to valid"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_expr_in_collection() {
+        let node = ConditionNode;
+        let mut ctx = NodeContext::new(Value::Null);
+        ctx.set_var("status", serde_json::json!("active"));
+        ctx.set_var("allowed", serde_json::json!(["active", "pending"]));
+        let config = serde_json::json!({
+            "expression": "in_(status, allowed)",
+            "true_branch": "yes",
+        });
+        let result = node.execute(&mut ctx, config).await.unwrap();
+        match result {
+            NodeOutput::Route(target) => assert_eq!(target, "yes"),
+            _ => panic!("Expected Route to yes"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_empty_expression_continues() {
+        let node = ConditionNode;
+        let mut ctx = NodeContext::new(Value::Null);
+        let config = serde_json::json!({"expression": ""});
+        let result = node.execute(&mut ctx, config).await.unwrap();
+        assert!(matches!(result, NodeOutput::Continue));
+    }
+
+    #[tokio::test]
+    async fn test_validate_empty_expr_ok() {
         let node = ConditionNode;
         let config = serde_json::json!({"expression": ""});
-        assert!(node.validate_config(&config).is_err());
+        assert!(node.validate_config(&config).is_ok());
     }
 }

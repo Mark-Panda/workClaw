@@ -126,6 +126,15 @@ function walkDslNode(
 
   // ── Dynamic split (fork / switch) ─────────────────────────────
   if (isDynamicSplit) {
+    // Read branch conditions from switch config (new format with inline branches)
+    const switchBranches = ruleNodeType === 'switch'
+      ? (dslNode.config?.branches ?? []) as Array<{ condition?: string; start_id: string; end_id: string }>
+      : [];
+    const conditionByStartId = new Map<string, string>();
+    for (const b of switchBranches) {
+      if (b.start_id) conditionByStartId.set(b.start_id, b.condition ?? '');
+    }
+
     flowNode.blocks = children.map((childId, idx) => {
       const blockId = `${dslNode.id}_branch_${idx}`;
       const branchChildren: FlowNodeJSON[] = [];
@@ -136,8 +145,11 @@ function walkDslNode(
         if (!currentNode) break;
         // Stop at join (for fork) or at the next root-level node
         if (currentNode.type === 'join') break;
-        const childNode = walkDslNode(current, nodeMap, adjacency, visited);
-        if (childNode) branchChildren.push(childNode);
+        // Skip case nodes — they're now inline in the switch config
+        if (currentNode.type !== 'case' && currentNode.type !== 'case_default') {
+          const childNode = walkDslNode(current, nodeMap, adjacency, visited);
+          if (childNode) branchChildren.push(childNode);
+        }
         const nextChildren = adjacency.get(current);
         current = nextChildren && nextChildren.length === 1 ? nextChildren[0] : '';
       }
@@ -148,6 +160,33 @@ function walkDslNode(
       const branchRuleType = ruleNodeType === 'switch'
         ? (isDefault ? 'case_default' : 'case')
         : '__branch__';
+
+      // Read condition: first try new format (from switch config branches),
+      // then fall back to old format (read from the case node in the DSL)
+      let condition = conditionByStartId.get(childId) ?? '';
+      if (condition === '' && ruleNodeType === 'switch') {
+        // Old format: childId points to a case node, read condition from it
+        const caseNode = nodeMap.get(childId);
+        if (caseNode && (caseNode.type === 'case' || caseNode.type === 'case_default')) {
+          condition = (caseNode.config as any)?.condition ?? '';
+          // In old format, the real action nodes are children of the case node
+          // Walk past the case node to find action nodes
+          if (branchChildren.length === 0) {
+            const caseChildren = adjacency.get(childId) ?? [];
+            let walkCurrent = caseChildren.length === 1 ? caseChildren[0] : '';
+            while (walkCurrent && maxDepth-- > 0) {
+              const walkNode = nodeMap.get(walkCurrent);
+              if (!walkNode) break;
+              if (walkNode.type === 'join') break;
+              const childNode = walkDslNode(walkCurrent, nodeMap, adjacency, visited);
+              if (childNode) branchChildren.push(childNode);
+              const next = adjacency.get(walkCurrent);
+              walkCurrent = next && next.length === 1 ? next[0] : '';
+            }
+          }
+        }
+      }
+
       return {
         id: blockId,
         data: {
@@ -156,7 +195,7 @@ function walkDslNode(
             ? (isDefault ? '默认' : `Case ${idx + 1}`)
             : `Branch ${idx + 1}`,
           config: ruleNodeType === 'switch' && !isDefault
-            ? { condition: '' }
+            ? { condition }
             : {},
           __isBranch: true,
           branchIndex: idx,
@@ -194,7 +233,7 @@ function walkDslNode(
       return {
         id: blockId,
         data: {
-          ruleNodeType: ruleNodeType === 'if' ? 'if_block' : ruleNodeType === 'try_catch' ? 'catch_block' : '__branch__',
+          ruleNodeType: ruleNodeType === 'if' ? 'if_block' : ruleNodeType === 'try_catch' ? (idx === 0 ? 'try_block' : 'catch_block') : '__branch__',
           title: names[idx],
           config: dslNode.config ?? {},
           __isBranch: true,
@@ -268,10 +307,32 @@ export function flowDocumentToDsl(
   // groupId → owner node ID (parent that connects to the group's first child)
   const owners = new Map<string, string>();
 
+  // Branch conditions extracted from case/case_default UI markers.
+  // Key: branch block ID (same as group ID), Value: condition string.
+  const branchConditions = new Map<string, string>();
+
   /** Walk the FlowNode tree collecting nodes and tracking group membership. */
   function walk(node: FlowNodeJSON, group: string, owner?: string): void {
     if (!node || !node.id) return;
     const data = node.data as FlowNodeData | undefined;
+
+    // Determine the DSL type: use ruleNodeType if available, fall back to flowGramType
+    const dslType = data?.ruleNodeType ?? toDslType(String(node.type ?? 'default'));
+
+    // Skip UI-only marker nodes (case, case_default) — their conditions
+    // are stored in the switch config's branches array instead.
+    if (dslType === 'case' || dslType === 'case_default') {
+      // Store condition for this branch (keyed by group = branch block ID)
+      if (data?.config) {
+        const condition = (data.config as Record<string, unknown>).condition ?? '';
+        branchConditions.set(group, String(condition));
+      }
+      // Process any children (case nodes are typically leaves, but handle gracefully)
+      for (const block of node.blocks ?? []) {
+        walk(block, group, owner);
+      }
+      return;
+    }
 
     if (!data?.__isBranch) {
       const rawConfig: Record<string, unknown> = data?.config ?? {};
@@ -279,9 +340,6 @@ export function flowDocumentToDsl(
       for (const [k, v] of Object.entries(rawConfig)) {
         if (!k.startsWith('__')) cleanConfig[k] = v;
       }
-
-      // Determine the DSL type: use ruleNodeType if available, fall back to flowGramType
-      const dslType = data?.ruleNodeType ?? toDslType(String(node.type ?? 'default'));
 
       nodes.push({
         id: node.id,
@@ -306,7 +364,14 @@ export function flowDocumentToDsl(
           walk(child, group, owner);
         }
       } else if (block.data?.__isBranch || block.type === 'block') {
-        // Block is a branch wrapper inside an owner
+        // Block is a branch wrapper inside an owner.
+        // Extract condition from case/case_default branch blocks for switch nodes.
+        const blockData = block.data as FlowNodeData | undefined;
+        const blockRuleType = blockData?.ruleNodeType;
+        if ((blockRuleType === 'case' || blockRuleType === 'case_default') && blockData?.config) {
+          const condition = String((blockData.config as Record<string, unknown>).condition ?? '');
+          branchConditions.set(block.id, condition);
+        }
         for (const child of block.blocks ?? []) {
           walk(child, block.id, node.id);
         }
@@ -361,6 +426,17 @@ export function flowDocumentToDsl(
     const nextRootId = ri + 1 < rootIds.length ? rootIds[ri + 1] : undefined;
     if (!nextRootId) continue;
 
+    // Check if this container actually owns branch groups.
+    // If it has no branches (e.g. an if/try_catch node in linear mode
+    // without branch blocks), it should NOT have its edges rewritten.
+    const ownedGroups: string[][] = [];
+    for (const [gid, ids] of groups) {
+      if (owners.get(gid) === containerId && ids.length > 0) {
+        ownedGroups.push(ids);
+      }
+    }
+    if (ownedGroups.length === 0) continue;
+
     // Remove any direct container→nextRoot edge (routing is via branches)
     const filtered: RuleEdge[] = [];
     for (const e of edges) {
@@ -372,15 +448,13 @@ export function flowDocumentToDsl(
     edges.push(...filtered);
 
     // Add branch-tail → nextRoot for each branch group owned by container
-    for (const [gid, ids] of groups) {
-      if (owners.get(gid) === containerId && ids.length > 0) {
-        edges.push({ from: ids[ids.length - 1], to: nextRootId });
-      }
+    for (const ids of ownedGroups) {
+      edges.push({ from: ids[ids.length - 1], to: nextRootId });
     }
   }
 
   // Rebuild outgoing map after edge modifications
-  enrichNodeConfigs(nodes, edges, groups, owners);
+  enrichNodeConfigs(nodes, edges, groups, owners, branchConditions);
 
   return {
     chain_id: chainId,
@@ -406,6 +480,7 @@ function enrichNodeConfigs(
   edges: RuleEdge[],
   groups: Map<string, string[]>,
   owners: Map<string, string>,
+  branchConditions: Map<string, string>,
 ): void {
   const outgoingEdges = new Map<string, string[]>();
   for (const e of edges) {
@@ -469,7 +544,7 @@ function enrichNodeConfigs(
       }
     }
 
-    if (node.type === 'fork' || node.type === 'switch') {
+    if (node.type === 'fork') {
       const segments: { start_id: string; end_id: string }[] = [];
       for (const [gid, ids] of groups) {
         if (owners.get(gid) === node.id && ids.length > 0) {
@@ -481,6 +556,22 @@ function enrichNodeConfigs(
       }
       if (segments.length > 0) {
         node.config.segments = segments;
+      }
+    }
+
+    if (node.type === 'switch') {
+      const branches: { condition: string; start_id: string; end_id: string }[] = [];
+      for (const [gid, ids] of groups) {
+        if (owners.get(gid) === node.id && ids.length > 0) {
+          const lastNodeId = ids[ids.length - 1];
+          const lastOut = outgoingEdges.get(lastNodeId) ?? [];
+          const endId = lastOut[0] ?? '';
+          const condition = branchConditions.get(gid) ?? '';
+          branches.push({ condition, start_id: ids[0], end_id: endId });
+        }
+      }
+      if (branches.length > 0) {
+        node.config.branches = branches;
       }
     }
   }
@@ -553,14 +644,9 @@ function getDefaultConfig(type: string): Record<string, unknown> {
     join: { merge_strategy: 'merge' },
     loop: { iterator_source: '', loop_var: 'item', max_iterations: 1000 },
     llm: { model: '', prompt: '', temperature: 0.7, max_tokens: 1024 },
-    switch: {},
-    case: { condition: '' },
-    case_default: {},
-    if: {},
-    if_block: {},
+    switch: { branches: [] },
+    if: { expression: 'true' },
     try_catch: {},
-    try_block: {},
-    catch_block: { error_type: '' },
     break_loop: {},
   };
   return defaults[type] ?? {};

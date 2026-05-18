@@ -1,6 +1,6 @@
 import { useState, useContext, useEffect } from 'react';
 import { useNodeRender } from '@flowgram.ai/fixed-layout-editor';
-import { NODE_LABELS, NODE_COLORS, nodeIcon, toRuleNodeType } from './nodes';
+import { NODE_LABELS, NODE_COLORS, nodeIcon, toRuleNodeType, BRANCH_MARKER_TYPES } from './nodes';
 import { NotifyContext } from './context';
 import { NodeSelectionContext } from './nodeSelection';
 
@@ -73,7 +73,7 @@ export default function DefaultRuleNode() {
   const hasFormErrors = form?.state.invalid;
 
   // Determine if this is a branch/block node (smaller, minimal)
-  const isBlock = ['if_block', 'case', 'case_default', 'try_block', 'catch_block', '__branch__'].includes(ruleNodeType);
+  const isBlock = BRANCH_MARKER_TYPES.has(ruleNodeType);
 
   if (isBlock) {
     return (
