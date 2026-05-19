@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import Button from '../../components/common/Button';
+import Spinner from '../../components/common/Spinner';
 import Modal from '../../components/common/Modal';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
+import { showError, showSuccess } from '../../utils/toast';
 import * as mcpApi from '../../api/mcp-servers';
 import type { McpServerItem, CreateMcpServerRequest, UpdateMcpServerRequest } from '../../api/mcp-servers';
 
@@ -22,6 +24,7 @@ export default function McpServersPage() {
   const [modal, setModal] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<CreateMcpServerRequest>({ ...EMPTY_FORM });
+  const [nameError, setNameError] = useState<string | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null);
 
@@ -31,7 +34,7 @@ export default function McpServersPage() {
       const res = await mcpApi.listMcpServers();
       setServers(res.mcp_servers);
     } catch {
-      /* ignore */
+      showError('加载 MCP 列表失败');
     }
     setLoading(false);
   }, []);
@@ -43,6 +46,7 @@ export default function McpServersPage() {
   const openNew = () => {
     setEditingId(null);
     setForm({ ...EMPTY_FORM });
+    setNameError(null);
     setModal(true);
   };
 
@@ -57,40 +61,55 @@ export default function McpServersPage() {
       env_json: s.env_json ?? '',
       enabled: s.enabled,
     });
+    setNameError(null);
     setModal(true);
   };
 
   const save = async () => {
-    if (!form.name.trim()) return;
-    if (editingId) {
-      const data: UpdateMcpServerRequest = {};
-      if (form.name !== (servers.find((s) => s.id === editingId)?.name ?? ''))
-        data.name = form.name;
-      if (form.transport !== (servers.find((s) => s.id === editingId)?.transport ?? ''))
-        data.transport = form.transport;
-      data.command = form.command || undefined;
-      data.args_json = form.args_json || undefined;
-      data.url = form.url || undefined;
-      data.env_json = form.env_json || undefined;
-      const current = servers.find((s) => s.id === editingId);
-      if (form.enabled !== (current?.enabled ?? true)) data.enabled = form.enabled;
-      await mcpApi.updateMcpServer(editingId, data);
-    } else {
-      await mcpApi.createMcpServer({
-        ...form,
-        command: form.command || undefined,
-        args_json: form.args_json || undefined,
-        url: form.url || undefined,
-        env_json: form.env_json || undefined,
-      });
+    if (!form.name.trim()) {
+      setNameError('名称不能为空');
+      return;
     }
-    setModal(false);
-    loadServers();
+    setNameError(null);
+    try {
+      if (editingId) {
+        const data: UpdateMcpServerRequest = {};
+        if (form.name !== (servers.find((s) => s.id === editingId)?.name ?? ''))
+          data.name = form.name;
+        if (form.transport !== (servers.find((s) => s.id === editingId)?.transport ?? ''))
+          data.transport = form.transport;
+        data.command = form.command || undefined;
+        data.args_json = form.args_json || undefined;
+        data.url = form.url || undefined;
+        data.env_json = form.env_json || undefined;
+        const current = servers.find((s) => s.id === editingId);
+        if (form.enabled !== (current?.enabled ?? true)) data.enabled = form.enabled;
+        await mcpApi.updateMcpServer(editingId, data);
+      } else {
+        await mcpApi.createMcpServer({
+          ...form,
+          command: form.command || undefined,
+          args_json: form.args_json || undefined,
+          url: form.url || undefined,
+          env_json: form.env_json || undefined,
+        });
+      }
+      showSuccess('保存成功');
+      setModal(false);
+      loadServers();
+    } catch {
+      showError('保存失败');
+    }
   };
 
   const confirmDelete = async () => {
     if (!deleteTarget) return;
-    await mcpApi.deleteMcpServer(deleteTarget.id);
+    try {
+      await mcpApi.deleteMcpServer(deleteTarget.id);
+      showSuccess('删除成功');
+    } catch {
+      showError('删除失败');
+    }
     setDeleteTarget(null);
     loadServers();
   };
@@ -105,7 +124,9 @@ export default function McpServersPage() {
       </div>
 
       {loading ? (
-        <div className="text-center text-gray-400 py-12">加载中...</div>
+        <div className="flex items-center justify-center py-16">
+          <Spinner className="h-8 w-8" />
+        </div>
       ) : servers.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
           尚未配置 MCP Server，请点击上方按钮添加。
@@ -164,17 +185,24 @@ export default function McpServersPage() {
       >
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
+            <label htmlFor="mcp-name" className="block text-sm font-medium text-gray-700 mb-1">名称</label>
             <input
-              className="input-field"
+              id="mcp-name"
+              className={`input-field ${nameError ? 'border-red-400' : ''}`}
               value={form.name}
-              onChange={(e) => setForm({ ...form, name: e.target.value })}
+              onChange={(e) => {
+                setForm({ ...form, name: e.target.value });
+                if (nameError) setNameError(null);
+              }}
               placeholder="例如：filesystem、github"
+              aria-invalid={!!nameError}
             />
+            {nameError && <p className="text-sm text-red-600 mt-1">{nameError}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">传输方式</label>
+            <label htmlFor="mcp-transport" className="block text-sm font-medium text-gray-700 mb-1">传输方式</label>
             <select
+              id="mcp-transport"
               className="input-field"
               value={form.transport}
               onChange={(e) => setForm({ ...form, transport: e.target.value })}
@@ -187,8 +215,9 @@ export default function McpServersPage() {
           {form.transport === 'stdio' ? (
             <>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">命令</label>
+                <label htmlFor="mcp-command" className="block text-sm font-medium text-gray-700 mb-1">命令</label>
                 <input
+                  id="mcp-command"
                   className="input-field"
                   value={form.command ?? ''}
                   onChange={(e) => setForm({ ...form, command: e.target.value })}
@@ -196,10 +225,11 @@ export default function McpServersPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="mcp-args" className="block text-sm font-medium text-gray-700 mb-1">
                   参数 (JSON) <span className="text-gray-400 font-normal">(可选)</span>
                 </label>
                 <input
+                  id="mcp-args"
                   className="input-field"
                   value={form.args_json ?? ''}
                   onChange={(e) => setForm({ ...form, args_json: e.target.value })}
@@ -209,8 +239,9 @@ export default function McpServersPage() {
             </>
           ) : (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">SSE URL</label>
+              <label htmlFor="mcp-url" className="block text-sm font-medium text-gray-700 mb-1">SSE URL</label>
               <input
+                id="mcp-url"
                 className="input-field"
                 value={form.url ?? ''}
                 onChange={(e) => setForm({ ...form, url: e.target.value })}
@@ -220,10 +251,11 @@ export default function McpServersPage() {
           )}
 
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="mcp-env" className="block text-sm font-medium text-gray-700 mb-1">
               环境变量 (JSON) <span className="text-gray-400 font-normal">(可选)</span>
             </label>
             <input
+              id="mcp-env"
               className="input-field"
               value={form.env_json ?? ''}
               onChange={(e) => setForm({ ...form, env_json: e.target.value })}

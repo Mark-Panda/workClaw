@@ -1,10 +1,13 @@
-use axum::extract::FromRef;
+use axum::extract::{FromRef, State};
 use axum::middleware as axum_mw;
+use axum::response::IntoResponse;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
 use herness_common::db::pool::DbPool;
 use herness_rule::engine::RuleEngine;
+use herness_rule::interceptor::builtins::metrics::MetricsInterceptor;
 use std::sync::Arc;
+use tower_http::cors::{AllowOrigin, CorsLayer};
 
 use super::agents::*;
 use super::auth::*;
@@ -23,6 +26,7 @@ use super::skills::*;
 pub struct AppState {
     pub pool: DbPool,
     pub rule_engine: Arc<RuleEngine>,
+    pub metrics_interceptor: Arc<MetricsInterceptor>,
 }
 
 impl FromRef<AppState> for DbPool {
@@ -32,8 +36,14 @@ impl FromRef<AppState> for DbPool {
 }
 
 pub fn create_router(state: AppState) -> Router {
+    // CORS layer
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::any())
+        .allow_methods(tower_http::cors::Any)
+        .allow_headers(tower_http::cors::Any);
+
     // Health check
-    let health = Router::new().route("/health", get(|| async { "OK" }));
+    let health = Router::new().route("/health", get(health_check));
 
     // Auth routes (no middleware)
     let auth = Router::new()
@@ -72,9 +82,11 @@ pub fn create_router(state: AppState) -> Router {
                 .delete(rule_delete::delete_rule),
         )
         .route("/rules/{id}/execute", post(rule_execute::execute_rule))
+        .route("/rules/{id}/toggle", post(rule_toggle::toggle_rule))
         .route("/rules/validate", post(rule_validate::validate_rule))
         .route("/rules/{id}/export", get(rule_export::export_rule))
         .route("/rules/import", post(rule_import::import_rule))
+        .route("/rules/metrics", get(rule_metrics::get_metrics))
         .route("/chat/send", post(chat_send::send_message))
         .route("/chat/conversations", get(chat_history::list_conversations))
         .route(
@@ -126,7 +138,21 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .merge(ws_router)
         .nest("/api", Router::new().merge(health).merge(auth).merge(api))
+        .layer(cors)
         .with_state(state)
+}
+
+async fn health_check(State(state): State<AppState>) -> impl IntoResponse {
+    let db_ok = sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(&state.pool)
+        .await
+        .is_ok();
+
+    axum::Json(serde_json::json!({
+        "status": if db_ok { "healthy" } else { "degraded" },
+        "cached_chains": state.rule_engine.cached_chain_count(),
+        "database": if db_ok { "ok" } else { "error" },
+    }))
 }
 
 #[cfg(test)]
@@ -135,6 +161,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use herness_common::db::pool::init_db;
+    use herness_rule::engine::EngineConfig;
     use herness_rule::interceptor::InterceptorRegistry;
     use herness_rule::node::registry::NodeRegistry;
     use tower::ServiceExt;
@@ -146,10 +173,11 @@ mod tests {
 
         let node_registry = Arc::new(NodeRegistry::new());
         let interceptor_registry = Arc::new(InterceptorRegistry::new());
+        let metrics_interceptor = Arc::new(MetricsInterceptor::new());
 
-        let rule_engine = Arc::new(RuleEngine::new(node_registry, interceptor_registry));
+        let rule_engine = Arc::new(RuleEngine::new(node_registry, interceptor_registry, EngineConfig::default()));
 
-        AppState { pool, rule_engine }
+        AppState { pool, rule_engine, metrics_interceptor }
     }
 
     #[tokio::test]

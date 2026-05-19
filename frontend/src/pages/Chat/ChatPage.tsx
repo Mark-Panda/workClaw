@@ -28,7 +28,7 @@ export default function ChatPage() {
     <div className="flex flex-col h-[calc(100vh-7rem)]">
       <div className="flex items-center justify-between mb-4">
         <h1 className="text-2xl font-bold">
-          Chat {conversationId ? `#${conversationId.slice(0, 8)}` : ''}
+          对话 {conversationId ? `#${conversationId.slice(0, 8)}` : ''}
         </h1>
       </div>
 

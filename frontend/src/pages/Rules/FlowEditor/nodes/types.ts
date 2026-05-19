@@ -138,7 +138,7 @@ export interface RuleNodeRegistry {
   onAdd: (ctx: FixedLayoutPluginContext, from: FlowNodeEntity) => FlowNodeJSON;
 }
 
-function defaultConfig(type: string): Record<string, unknown> {
+export function defaultConfig(type: string): Record<string, unknown> {
   const m: Record<string, Record<string, unknown>> = {
     condition: { expression: 'true' },
     transform: { field_map: {} },

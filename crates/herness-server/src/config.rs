@@ -16,6 +16,8 @@ struct ServerSection {
     jwt_secret: Option<String>,
     rust_log: Option<String>,
     skills_dir: Option<String>,
+    engine_max_steps: Option<u32>,
+    engine_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +28,8 @@ pub struct ServerConfig {
     pub jwt_secret: String,
     pub rust_log: String,
     pub skills_dir: PathBuf,
+    pub engine_max_steps: u32,
+    pub engine_timeout_secs: u64,
 }
 
 impl ServerConfig {
@@ -52,6 +56,8 @@ impl ServerConfig {
                         .ok_or(())
                 })
                 .unwrap_or_else(|_| PathBuf::from("./skills")),
+            engine_max_steps: env_or_parse("ENGINE_MAX_STEPS", cfg.engine_max_steps.unwrap_or(1000)),
+            engine_timeout_secs: env_or_parse("ENGINE_TIMEOUT_SECS", cfg.engine_timeout_secs.unwrap_or(300)),
         }
     }
 
@@ -121,6 +127,8 @@ impl Default for ServerSection {
             jwt_secret: None,
             rust_log: None,
             skills_dir: None,
+            engine_max_steps: None,
+            engine_timeout_secs: None,
         }
     }
 }

@@ -20,16 +20,16 @@ export default function KanbanBoardPage() {
     <div>
       <div className="flex items-center justify-between mb-6">
         <h1 className="text-2xl font-bold">
-          {currentBoard?.name ?? 'Kanban Board'}
+          {currentBoard?.name ?? '看板'}
         </h1>
         <Button onClick={() => handleAddTask(currentBoard?.columns[0]?.id ?? '')}>
-          Add Task
+          添加任务
         </Button>
       </div>
 
       {!currentBoard || currentBoard.columns.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
-          No board selected. Select or create a board to start managing tasks.
+          尚未选择看板。请选择或创建看板以开始管理任务。
         </div>
       ) : (
         <div className="flex gap-4 overflow-x-auto pb-4">

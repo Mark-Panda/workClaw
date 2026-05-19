@@ -16,7 +16,7 @@ import { Tooltip } from '@douyinfe/semi-ui';
 import type { RuleChainDsl, RuleEdge } from '../../../types/rule';
 import { buildRegistries, NODE_CATEGORIES, NODE_LABELS, NODE_COLORS } from './nodes';
 import { dslToFlowDocument, flowDocumentToDsl } from './converter';
-import { NotifyContext } from './context';
+import { NotifyContext, RegistriesContext } from './context';
 import NodeAdder from './NodeAdder';
 import BranchAdder from './BranchAdder';
 import DefaultRuleNode from './DefaultRuleNode';
@@ -138,16 +138,33 @@ interface Props {
   viewMode?: 'visual' | 'json';
   /** Called when the user clicks the view-mode toggle in the toolbar */
   onViewModeSwitch?: (mode: 'visual' | 'json') => void;
+  /** Persisted canvas state (zoom, scroll, node positions) — restored on mount */
+  canvasState?: unknown;
+  /** Called when canvas state changes (for persistence) */
+  onCanvasStateChange?: (state: unknown) => void;
 }
 
-export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, onViewModeSwitch }: Props) {
+export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, onViewModeSwitch, canvasState, onCanvasStateChange }: Props) {
   const editorRef = useRef<FixedLayoutPluginContext>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const dslRef = useRef(dsl);
   dslRef.current = dsl;
+  const onCanvasStateChangeRef = useRef(onCanvasStateChange);
+  onCanvasStateChangeRef.current = onCanvasStateChange;
 
-  const initialData = useMemo(() => dslToFlowDocument(dsl), [dsl]);
+  // Only use canvasState for the initial render — subsequent updates go to
+  // onCanvasStateChange for persistence but must NOT recompute initialData,
+  // otherwise the FlowGram editor re-initializes on every canvas mutation.
+  const canvasStateUsed = useRef(false);
+  const initialData = useMemo(() => {
+    if (canvasState && !canvasStateUsed.current && typeof canvasState === 'object' && 'nodes' in (canvasState as any)) {
+      canvasStateUsed.current = true;
+      return canvasState as FlowDocumentJSON;
+    }
+    return dslToFlowDocument(dsl);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dsl]);
 
   const registries = useMemo(() => buildRegistries(), []);
 
@@ -258,8 +275,14 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
 
       canvasDslRef.current = newDsl;
       onChangeRef.current(newDsl);
-    } catch {
-      // Ignore conversion errors
+
+      // Persist canvas state for restore on next load
+      try {
+        const docJsonRaw = ctx.document.toJSON();
+        onCanvasStateChangeRef.current?.(docJsonRaw);
+      } catch { /* ignore */ }
+    } catch (err) {
+      console.warn('[FlowEditor] DSL conversion error:', err);
     }
   }, []);
 
@@ -268,11 +291,14 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
       ctx.document.onNodeCreate(() => notifyChange());
       ctx.document.onNodeDispose(() => notifyChange());
       ctx.document.onNodeUpdate(() => notifyChange());
-      setTimeout(() => {
-        ctx.tools.fitView();
-      }, 10);
+      // Only fitView when there is no saved canvas state (first visit)
+      if (!canvasState) {
+        setTimeout(() => {
+          ctx.tools.fitView();
+        }, 10);
+      }
     },
-    [notifyChange],
+    [notifyChange, canvasState],
   );
 
   // Capture canvas state BEFORE switching away from visual mode.
@@ -342,6 +368,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
 
   return (
     <NotifyContext.Provider value={notifyChange}>
+    <RegistriesContext.Provider value={registries}>
     <div className="h-full w-full relative flowgram-editor-wrap" key="visual">
       <FixedLayoutEditorProvider
         ref={editorRef}
@@ -379,6 +406,7 @@ export default function FlowEditor({ dsl, onChange, readonly = false, viewMode, 
         </div>
       </FixedLayoutEditorProvider>
     </div>
+    </RegistriesContext.Provider>
     </NotifyContext.Provider>
   );
 }

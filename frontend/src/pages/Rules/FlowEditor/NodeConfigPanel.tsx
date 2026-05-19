@@ -163,6 +163,9 @@ export default function NodeConfigPanel() {
   const [, setTick] = useState(0);
   const forceUpdate = useCallback(() => setTick((t) => t + 1), []);
 
+  // Track JSON parse errors per field
+  const [jsonErrors, setJsonErrors] = useState<Record<string, string>>({});
+
   // Access the node entity and its form from the FlowGram document
   const form: {
     values: Record<string, unknown>;
@@ -292,7 +295,7 @@ export default function NodeConfigPanel() {
                   <span style={{ color: '#e53e3e', marginLeft: 2 }}>*</span>
                 ) : null}
               </label>
-              {renderFieldInput(field, config[field.name], handleChange)}
+              {renderFieldInput(field, config[field.name], handleChange, jsonErrors, setJsonErrors)}
               {field.required && (config[field.name] === undefined || config[field.name] === '') && (
                 <span style={{ fontSize: 11, color: '#e53e3e', marginTop: 2, display: 'block' }}>
                   此字段必填
@@ -327,6 +330,8 @@ function renderFieldInput(
   field: FieldDef,
   value: unknown,
   onChange: (name: string, value: unknown) => void,
+  jsonErrors: Record<string, string>,
+  setJsonErrors: React.Dispatch<React.SetStateAction<Record<string, string>>>,
 ) {
   if (field.type === 'boolean') {
     return (
@@ -377,31 +382,35 @@ function renderFieldInput(
 
   if (field.type === 'json') {
     const text = value != null ? JSON.stringify(value, null, 2) : '';
+    const jsonErr = jsonErrors[field.name];
     return (
-      <textarea
-        style={{ ...inputStyle, minHeight: 72, resize: 'vertical', fontFamily: 'monospace', fontSize: 12 }}
-        value={text}
-        placeholder="{}"
-        rows={4}
-        onChange={(e) => {
-          try {
-            const parsed = JSON.parse(e.target.value);
-            onChange(field.name, parsed);
-          } catch {
-            // Let user keep typing
-          }
-        }}
-        onFocus={(e) => { e.target.style.borderColor = '#3370ff'; }}
-        onBlur={(e) => {
-          try {
-            const parsed = JSON.parse(e.target.value);
-            onChange(field.name, parsed);
-          } catch {
-            // Invalid JSON
-          }
-          e.target.style.borderColor = '#d9d9d9';
-        }}
-      />
+      <div>
+        <textarea
+          style={{
+            ...inputStyle,
+            minHeight: 72,
+            resize: 'vertical',
+            fontFamily: 'monospace',
+            fontSize: 12,
+            borderColor: jsonErr ? '#e53e3e' : undefined,
+          }}
+          value={text}
+          placeholder="{}"
+          rows={4}
+          onChange={(e) => {
+            try {
+              const parsed = JSON.parse(e.target.value);
+              onChange(field.name, parsed);
+              setJsonErrors((prev) => { const n = { ...prev }; delete n[field.name]; return n; });
+            } catch {
+              setJsonErrors((prev) => ({ ...prev, [field.name]: 'JSON 格式不正确' }));
+            }
+          }}
+          onFocus={(e) => { if (!jsonErr) e.target.style.borderColor = '#3370ff'; }}
+          onBlur={(e) => { if (!jsonErr) e.target.style.borderColor = '#d9d9d9'; }}
+        />
+        {jsonErr && <span style={{ fontSize: 11, color: '#e53e3e', marginTop: 2, display: 'block' }}>{jsonErr}</span>}
+      </div>
     );
   }
 

@@ -16,10 +16,22 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:3001',
+      '/api': 'http://localhost:3000',
       '/ws': {
-        target: 'ws://localhost:3001',
+        target: 'ws://localhost:3000',
         ws: true,
+      },
+    },
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+          'vendor-semi': ['@douyinfe/semi-ui'],
+          'vendor-flowgram': ['@flowgram.ai/fixed-layout-editor'],
+          'vendor-query': ['@tanstack/react-query', 'zustand'],
+        },
       },
     },
   },

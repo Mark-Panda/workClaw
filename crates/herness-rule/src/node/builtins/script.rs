@@ -5,6 +5,31 @@ use serde_json::Value;
 use crate::node::traits::{NodeContext, NodeHandler, NodeOutput};
 use herness_common::error::{AppError, AppResult};
 
+/// Maximum operations a script can perform (prevents infinite loops).
+const MAX_OPERATIONS: u64 = 10_000;
+/// Maximum string size in characters.
+const MAX_STRING_SIZE: usize = 16 * 1024;
+/// Maximum array size.
+const MAX_ARRAY_SIZE: usize = 1024;
+
+/// Build a sandboxed Rhai engine with resource limits.
+fn build_sandboxed_engine() -> Engine {
+    let mut engine = Engine::new();
+
+    // Resource limits
+    engine.set_max_operations(MAX_OPERATIONS);
+    engine.set_max_string_size(MAX_STRING_SIZE);
+    engine.set_max_array_size(MAX_ARRAY_SIZE);
+
+    // Disable dangerous features: no file I/O, no system calls, no modules
+    engine.disable_symbol("eval");
+    engine.disable_symbol("import");
+    engine.disable_symbol("export");
+    engine.disable_symbol("Fn");
+
+    engine
+}
+
 pub struct ScriptNode;
 
 #[async_trait]
@@ -23,7 +48,7 @@ impl NodeHandler for ScriptNode {
             return Ok(NodeOutput::Continue);
         }
 
-        let engine = Engine::new();
+        let engine = build_sandboxed_engine();
         let mut scope = Scope::new();
 
         // Push all context variables into scope
@@ -156,5 +181,23 @@ mod tests {
             }
             _ => panic!("Expected Continue"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_script_node_infinite_loop_blocked() {
+        let node = ScriptNode;
+        let mut ctx = NodeContext::new(Value::Null);
+        let config = serde_json::json!({"script": "let x = 0; while x < 1000000 { x += 1; }"});
+        let result = node.execute(&mut ctx, config).await;
+        assert!(result.is_err(), "Infinite loop script should be blocked");
+    }
+
+    #[tokio::test]
+    async fn test_script_node_eval_disabled() {
+        let node = ScriptNode;
+        let mut ctx = NodeContext::new(Value::Null);
+        let config = serde_json::json!({"script": "eval(\"let x = 1;\")"});
+        let result = node.execute(&mut ctx, config).await;
+        assert!(result.is_err(), "eval should be disabled in sandbox");
     }
 }

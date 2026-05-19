@@ -1,6 +1,7 @@
+import { nanoid } from 'nanoid';
 import type { FlowDocumentJSON, FlowNodeJSON } from '@flowgram.ai/fixed-layout-editor';
 import type { RuleChainDsl, RuleNode, RuleEdge } from '../../../types/rule';
-import { NODE_LABELS, toFlowGramType } from './nodes/types';
+import { NODE_LABELS, toFlowGramType, defaultConfig } from './nodes/types';
 
 /** A FlowGram node's data shape stored alongside the canvas representation. */
 interface FlowNodeData {
@@ -625,33 +626,10 @@ export function createNodeJson(
 ): { id: string; config: Record<string, unknown> } {
   return {
     id: id ?? `${type}_${generateShortId()}`,
-    config: getDefaultConfig(type),
+    config: defaultConfig(type),
   };
-}
-
-function getDefaultConfig(type: string): Record<string, unknown> {
-  const defaults: Record<string, Record<string, unknown>> = {
-    condition: { expression: 'true' },
-    transform: { field_map: {} },
-    assign: { variables: {} },
-    delay: { duration_ms: 1000 },
-    log: { level: 'info', message: '' },
-    script: { script: '// Rhai script\nlet result = input;\nresult' },
-    rest_client: { method: 'POST', url: '', timeout_ms: 10000 },
-    notification: { webhook_url: '', template: '' },
-    subchain: { subchain_id: '', pass_context: true },
-    fork: { join_at: '', segments: [] },
-    join: { merge_strategy: 'merge' },
-    loop: { iterator_source: '', loop_var: 'item', max_iterations: 1000 },
-    llm: { model: '', prompt: '', temperature: 0.7, max_tokens: 1024 },
-    switch: { branches: [] },
-    if: { expression: 'true' },
-    try_catch: {},
-    break_loop: {},
-  };
-  return defaults[type] ?? {};
 }
 
 function generateShortId(): string {
-  return Math.random().toString(36).substring(2, 10);
+  return nanoid(12);
 }

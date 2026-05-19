@@ -30,7 +30,7 @@ export interface RuleChain {
   dsl: RuleChainDsl;
   canvas_state?: unknown;
   version: number;
-  status: 'draft' | 'active' | 'archived';
+  status: 'draft' | 'enabled' | 'disabled' | 'archived';
   created_at: string;
   updated_at: string;
 }

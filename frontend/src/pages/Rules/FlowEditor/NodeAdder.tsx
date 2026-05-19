@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useContext } from 'react';
 import { useClientContext } from '@flowgram.ai/fixed-layout-editor';
 import type { FlowNodeEntity, FixedLayoutPluginContext } from '@flowgram.ai/fixed-layout-editor';
-import { buildRegistries } from './nodes';
 import type { RuleNodeType } from './nodes';
 import { NODE_LABELS, NODE_COLORS, NODE_CATEGORIES, getNodeFlowType } from './nodes';
+import { RegistriesContext } from './context';
 
 /**
  * The "+" button rendered between nodes. On click, shows a popover listing
@@ -17,8 +17,7 @@ export default function NodeAdder(props: {
   const { from } = props;
   const [visible, setVisible] = useState(false);
   const ctx = useClientContext();
-
-  const registries = buildRegistries();
+  const registries = useContext(RegistriesContext);
 
   const add = (type: RuleNodeType) => {
     const registry = registries.find((r) => r.type === getNodeFlowType(type));

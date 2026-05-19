@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import Button from '../../components/common/Button';
+import Spinner from '../../components/common/Spinner';
 import Modal from '../../components/common/Modal';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
+import { showError, showSuccess } from '../../utils/toast';
 import * as skillsApi from '../../api/skills';
 import type { SkillItem } from '../../api/skills';
 
@@ -17,10 +19,9 @@ export default function SkillsPage() {
     setLoading(true);
     try {
       const res = await skillsApi.listSkills();
-      console.log('skills list:', res);
       setSkills(res.skills);
-    } catch (err) {
-      console.error('list skills error:', err);
+    } catch {
+      showError('加载技能列表失败');
     }
     setLoading(false);
   }, []);
@@ -34,18 +35,17 @@ export default function SkillsPage() {
     if (!file) return;
 
     if (!file.name.endsWith('.zip')) {
-      alert('仅支持上传 ZIP 文件');
+      showError('仅支持上传 ZIP 文件');
       return;
     }
 
     setUploading(true);
     try {
-      const result = await skillsApi.uploadSkill(file);
-      console.log('upload result:', result);
+      await skillsApi.uploadSkill(file);
+      showSuccess('上传成功');
       await loadSkills();
     } catch (err: any) {
-      console.error('upload error:', err);
-      alert(err?.response?.status === 400 ? '上传失败：文件格式或内容不正确' : '上传失败');
+      showError(err?.response?.status === 400 ? '上传失败：文件格式或内容不正确' : '上传失败');
     }
     setUploading(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -56,7 +56,7 @@ export default function SkillsPage() {
       const res = await skillsApi.getSkillContent(name);
       setContentModal(res);
     } catch {
-      alert('获取内容失败');
+      showError('获取内容失败');
     }
   };
 
@@ -64,9 +64,10 @@ export default function SkillsPage() {
     if (!deleteTarget) return;
     try {
       await skillsApi.deleteSkill(deleteTarget);
+      showSuccess('删除成功');
       loadSkills();
     } catch {
-      alert('删除失败');
+      showError('删除失败');
     }
     setDeleteTarget(null);
   };
@@ -91,12 +92,15 @@ export default function SkillsPage() {
             accept=".zip"
             className="hidden"
             onChange={handleUpload}
+            aria-label="上传技能 ZIP 文件"
           />
         </div>
       </div>
 
       {loading ? (
-        <div className="text-center text-gray-400 py-12">加载中...</div>
+        <div className="flex items-center justify-center py-16">
+          <Spinner className="h-8 w-8" />
+        </div>
       ) : skills.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
           尚未上传任何技能，请点击上方按钮上传 ZIP 包。

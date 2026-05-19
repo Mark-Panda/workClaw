@@ -8,14 +8,21 @@ use herness_core::llm::chat::{ChatCompletionRequest, ChatMessage};
 use herness_core::llm::provider::{ChatResponse, LlmProvider};
 use herness_core::llm::{AnthropicProvider, OpenAiProvider};
 
+/// Default per-node LLM timeout in seconds
+const DEFAULT_LLM_TIMEOUT_SECS: u64 = 60;
+/// Default max retries for transient LLM errors
+const DEFAULT_MAX_RETRIES: u32 = 2;
+/// Retry delay in milliseconds
+const RETRY_DELAY_MS: u64 = 500;
+
 /// LLM node configuration
 #[derive(Debug, Serialize, Deserialize)]
 struct LlmConfig {
     /// Provider type: "anthropic" or "openai"
     #[serde(default = "default_provider")]
     provider: String,
-    /// API key (if empty, reads from env var)
-    #[serde(default)]
+    /// API key env var name (e.g. "ANTHROPIC_API_KEY"). If set, reads from env; if empty, falls back to provider default.
+    #[serde(default, rename = "api_key_env")]
     api_key: String,
     /// Base URL for the API (optional, for proxies)
     #[serde(default)]
@@ -37,6 +44,12 @@ struct LlmConfig {
     /// Context variable name to store the response text
     #[serde(default = "default_output_var")]
     output_var: String,
+    /// Per-node timeout in seconds (default: 60)
+    #[serde(default = "default_timeout_secs")]
+    timeout_secs: u64,
+    /// Max retries for transient errors (default: 2)
+    #[serde(default = "default_max_retries")]
+    max_retries: u32,
 }
 
 fn default_provider() -> String {
@@ -53,6 +66,14 @@ fn default_max_tokens() -> u32 {
 
 fn default_output_var() -> String {
     "llm_response".into()
+}
+
+fn default_timeout_secs() -> u64 {
+    DEFAULT_LLM_TIMEOUT_SECS
+}
+
+fn default_max_retries() -> u32 {
+    DEFAULT_MAX_RETRIES
 }
 
 pub struct LlmNode;
@@ -96,8 +117,8 @@ impl NodeHandler for LlmNode {
             tools: None,
         };
 
-        // Create provider and call LLM
-        let response = call_llm(&cfg, request).await?;
+        // Call LLM with per-node timeout and retry
+        let response = call_llm_with_retry(&cfg, request).await?;
 
         // Store response in context
         ctx.set_var(&cfg.output_var, Value::String(response.text));
@@ -119,8 +140,61 @@ impl NodeHandler for LlmNode {
     }
 }
 
-/// Call the LLM provider with the given request
-async fn call_llm(cfg: &LlmConfig, request: ChatCompletionRequest) -> AppResult<ChatResponse> {
+/// Call LLM with per-node timeout and retry logic for transient errors.
+async fn call_llm_with_retry(cfg: &LlmConfig, request: ChatCompletionRequest) -> AppResult<ChatResponse> {
+    let timeout = std::time::Duration::from_secs(cfg.timeout_secs);
+    let max_retries = cfg.max_retries;
+
+    let mut last_error = None;
+    for attempt in 0..=max_retries {
+        if attempt > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(RETRY_DELAY_MS * attempt as u64)).await;
+        }
+
+        match tokio::time::timeout(timeout, call_llm(cfg, &request)).await {
+            Ok(Ok(response)) => return Ok(response),
+            Ok(Err(e)) => {
+                let err_str = e.to_string();
+                // Retry on transient errors (rate limit, server error, timeout)
+                let is_transient = err_str.contains("429")
+                    || err_str.contains("500")
+                    || err_str.contains("502")
+                    || err_str.contains("503")
+                    || err_str.contains("timed out")
+                    || err_str.contains("rate limit");
+                if is_transient && attempt < max_retries {
+                    tracing::warn!(
+                        "LLM call attempt {} failed (transient): {}, retrying...",
+                        attempt + 1,
+                        err_str
+                    );
+                    last_error = Some(e);
+                    continue;
+                }
+                return Err(e);
+            }
+            Err(_) => {
+                let timeout_err = AppError::RuleExecution(format!(
+                    "LLM call timed out after {}s (attempt {}/{})",
+                    cfg.timeout_secs,
+                    attempt + 1,
+                    max_retries + 1
+                ));
+                if attempt < max_retries {
+                    tracing::warn!("{}", timeout_err);
+                    last_error = Some(timeout_err);
+                    continue;
+                }
+                return Err(timeout_err);
+            }
+        }
+    }
+
+    Err(last_error.unwrap_or_else(|| AppError::RuleExecution("LLM call failed after retries".into())))
+}
+
+/// Call the LLM provider with the given request (no timeout/retry — handled by caller)
+async fn call_llm(cfg: &LlmConfig, request: &ChatCompletionRequest) -> AppResult<ChatResponse> {
     match cfg.provider.as_str() {
         "anthropic" => {
             let api_key = resolve_api_key(&cfg.api_key, "ANTHROPIC_API_KEY")?;
@@ -132,7 +206,7 @@ async fn call_llm(cfg: &LlmConfig, request: ChatCompletionRequest) -> AppResult<
                     .map_err(|e| AppError::RuleExecution(format!("Invalid Anthropic base_url: {}", e)))?
             };
             provider
-                .chat(request)
+                .chat(request.clone())
                 .await
                 .map_err(|e| AppError::RuleExecution(format!("Anthropic API error: {}", e)))
         }
@@ -144,7 +218,7 @@ async fn call_llm(cfg: &LlmConfig, request: ChatCompletionRequest) -> AppResult<
                 OpenAiProvider::new(api_key).with_base_url(cfg.base_url.clone())
             };
             provider
-                .chat(request)
+                .chat(request.clone())
                 .await
                 .map_err(|e| AppError::RuleExecution(format!("OpenAI API error: {}", e)))
         }
@@ -155,14 +229,13 @@ async fn call_llm(cfg: &LlmConfig, request: ChatCompletionRequest) -> AppResult<
     }
 }
 
-/// Resolve API key: use explicit key from config, or fall back to env var
-fn resolve_api_key(config_key: &str, env_var: &str) -> AppResult<String> {
-    if !config_key.is_empty() {
-        return Ok(config_key.to_string());
-    }
+/// Resolve API key: use env var name from config, or fall back to provider default env var.
+/// Never accept raw API key strings in DSL config to prevent credential leakage.
+fn resolve_api_key(config_env: &str, default_env: &str) -> AppResult<String> {
+    let env_var = if config_env.is_empty() { default_env } else { config_env };
     std::env::var(env_var).map_err(|_| {
         AppError::Validation(format!(
-            "llm: no API key provided in config and {} env var is not set",
+            "llm: {} env var is not set",
             env_var
         ))
     })
@@ -246,5 +319,20 @@ mod tests {
         assert_eq!(cfg.temperature, 0.7);
         assert_eq!(cfg.max_tokens, 1024);
         assert_eq!(cfg.provider, "openai");
+        assert_eq!(cfg.timeout_secs, DEFAULT_LLM_TIMEOUT_SECS);
+        assert_eq!(cfg.max_retries, DEFAULT_MAX_RETRIES);
+    }
+
+    #[test]
+    fn test_resolve_api_key_uses_env_var() {
+        // This test just verifies the logic — env var may not be set
+        let result = resolve_api_key("", "NONEXISTENT_KEY_FOR_TEST");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_api_key_custom_env() {
+        let result = resolve_api_key("CUSTOM_LLM_KEY", "NONEXISTENT_KEY_FOR_TEST");
+        assert!(result.is_err()); // CUSTOM_LLM_KEY not set either
     }
 }

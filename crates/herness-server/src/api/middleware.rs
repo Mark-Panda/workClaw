@@ -5,6 +5,8 @@ use axum::response::Response;
 use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 
+const DEFAULT_JWT_SECRET: &str = "dev-secret-change-in-production";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
@@ -38,6 +40,17 @@ pub fn verify_jwt(token: &str, secret: &str) -> Result<Claims, jsonwebtoken::err
     .map(|data| data.claims)
 }
 
+/// Get the JWT secret from environment, warning if using default.
+pub fn get_jwt_secret() -> String {
+    let secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| DEFAULT_JWT_SECRET.to_string());
+    if secret == DEFAULT_JWT_SECRET {
+        tracing::warn!(
+            "⚠️  JWT_SECRET is using the default value. Set JWT_SECRET env var in production!"
+        );
+    }
+    secret
+}
+
 /// JWT authentication middleware.
 /// Extracts Bearer token, validates it, and injects Claims via request extension.
 pub async fn auth_middleware(mut request: Request, next: Next) -> Result<Response, StatusCode> {
@@ -52,9 +65,7 @@ pub async fn auth_middleware(mut request: Request, next: Next) -> Result<Respons
         None => return Err(StatusCode::UNAUTHORIZED),
     };
 
-    let secret = std::env::var("JWT_SECRET")
-        .unwrap_or_else(|_| "dev-secret-change-in-production".into());
-
+    let secret = get_jwt_secret();
     let claims = verify_jwt(token, &secret).map_err(|_| StatusCode::UNAUTHORIZED)?;
 
     request.extensions_mut().insert(claims);

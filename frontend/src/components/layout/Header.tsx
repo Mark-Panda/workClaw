@@ -13,8 +13,9 @@ export default function Header() {
         <button
           onClick={logout}
           className="text-sm text-gray-500 hover:text-gray-700 transition-colors"
+          aria-label="退出登录"
         >
-          Logout
+          退出登录
         </button>
       </div>
     </header>

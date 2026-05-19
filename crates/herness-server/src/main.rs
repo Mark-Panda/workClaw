@@ -1,5 +1,5 @@
 use herness_common::db::pool::init_db;
-use herness_rule::engine::RuleEngine;
+use herness_rule::engine::{EngineConfig, RuleEngine};
 use herness_rule::interceptor::builtins::auth::AuthInterceptor;
 use herness_rule::interceptor::builtins::logging::LoggingInterceptor;
 use herness_rule::interceptor::builtins::metrics::MetricsInterceptor;
@@ -28,11 +28,48 @@ use herness_server::api::router::{create_router, AppState};
 use herness_server::config::ServerConfig;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tokio::signal;
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => tracing::info!("Received Ctrl+C, shutting down gracefully..."),
+        _ = terminate => tracing::info!("Received SIGTERM, shutting down gracefully..."),
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
-    tracing_subscriber::fmt::init();
+
+    // Configure structured JSON logging for production, plain text for dev
+    let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string());
+    if std::env::var("LOG_FORMAT").map(|v| v == "json").unwrap_or(false) {
+        tracing_subscriber::fmt()
+            .json()
+            .with_env_filter(rust_log)
+            .init();
+    } else {
+        tracing_subscriber::fmt()
+            .with_env_filter(rust_log)
+            .init();
+    }
 
     let config = ServerConfig::from_env();
 
@@ -43,12 +80,20 @@ async fn main() -> anyhow::Result<()> {
     let (node_registry, fork_node, subchain_node, loop_node, switch_node, try_catch_node) =
         build_node_registry();
     let node_registry = Arc::new(node_registry);
-    let interceptor_registry = Arc::new(build_interceptor_registry());
 
-    // Build rule engine
+    // Build metrics interceptor separately so we can share it with AppState
+    let metrics_interceptor = Arc::new(MetricsInterceptor::new());
+    let interceptor_registry = Arc::new(build_interceptor_registry(metrics_interceptor.clone()));
+
+    // Build rule engine with config
+    let engine_config = EngineConfig {
+        max_steps: config.engine_max_steps,
+        execution_timeout_secs: config.engine_timeout_secs,
+    };
     let rule_engine = Arc::new(RuleEngine::new(
         node_registry.clone(),
         interceptor_registry,
+        engine_config,
     ));
 
     // Wire engine into nodes that need it
@@ -58,9 +103,16 @@ async fn main() -> anyhow::Result<()> {
     switch_node.set_engine(rule_engine.clone()).await;
     try_catch_node.set_engine(rule_engine.clone()).await;
 
+    // Preload enabled chains into engine cache
+    match preload_enabled_chains(&pool, &rule_engine).await {
+        Ok(count) => tracing::info!("Preloaded {} enabled rule chains", count),
+        Err(e) => tracing::warn!("Failed to preload chains: {}", e),
+    }
+
     let state = AppState {
         pool,
         rule_engine,
+        metrics_interceptor,
     };
 
     let app = create_router(state);
@@ -68,8 +120,11 @@ async fn main() -> anyhow::Result<()> {
     let listener = TcpListener::bind(config.addr()).await?;
     tracing::info!("Server listening on {}", config.addr());
 
-    axum::serve(listener, app).await?;
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
+    tracing::info!("Server shutdown complete");
     Ok(())
 }
 
@@ -123,11 +178,30 @@ fn build_node_registry() -> (
     )
 }
 
-fn build_interceptor_registry() -> InterceptorRegistry {
+fn build_interceptor_registry(metrics: Arc<MetricsInterceptor>) -> InterceptorRegistry {
     let mut registry = InterceptorRegistry::new();
     registry.register(Arc::new(LoggingInterceptor));
-    registry.register(Arc::new(MetricsInterceptor::new()));
+    registry.register(metrics);
     registry.register(Arc::new(AuthInterceptor));
     registry.register(Arc::new(ValidationInterceptor));
     registry
+}
+
+async fn preload_enabled_chains(
+    pool: &herness_common::db::pool::DbPool,
+    engine: &herness_rule::engine::RuleEngine,
+) -> anyhow::Result<usize> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT id, dsl_json FROM rule_chains WHERE status = 'enabled'",
+    )
+    .fetch_all(pool)
+    .await?;
+
+    let chains: Vec<(String, String)> = rows
+        .iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+
+    Ok(engine.preload_chains_from(chains))
 }

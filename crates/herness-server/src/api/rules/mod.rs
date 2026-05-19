@@ -5,6 +5,8 @@ pub mod rule_export;
 pub mod rule_get;
 pub mod rule_import;
 pub mod rule_list;
+pub mod rule_metrics;
+pub mod rule_toggle;
 pub mod rule_update;
 pub mod rule_validate;
 
@@ -15,5 +17,7 @@ pub use rule_export::export_rule;
 pub use rule_get::get_rule;
 pub use rule_import::import_rule;
 pub use rule_list::list_rules;
+pub use rule_metrics::get_metrics;
+pub use rule_toggle::toggle_rule;
 pub use rule_update::update_rule;
 pub use rule_validate::validate_rule;

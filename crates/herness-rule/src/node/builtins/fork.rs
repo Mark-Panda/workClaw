@@ -10,6 +10,9 @@ use crate::engine::RuleEngine;
 use crate::node::traits::{NodeContext, NodeHandler, NodeOutput};
 use herness_common::error::{AppError, AppResult};
 
+/// Maximum concurrent branch tasks to prevent resource exhaustion.
+const MAX_CONCURRENT_BRANCHES: usize = 10;
+
 /// A single branch defined by segment start/end node IDs.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct BranchSegment {
@@ -83,6 +86,14 @@ impl NodeHandler for ForkNode {
 
         // ── Multi-node branch segments ──────────────────────────
         if !cfg.segments.is_empty() {
+            if cfg.segments.len() > MAX_CONCURRENT_BRANCHES {
+                return Err(AppError::Validation(format!(
+                    "fork: too many branches ({}), maximum is {}",
+                    cfg.segments.len(),
+                    MAX_CONCURRENT_BRANCHES
+                )));
+            }
+
             let mut tasks = FuturesUnordered::new();
 
             for (idx, seg) in cfg.segments.iter().enumerate() {
@@ -104,9 +115,10 @@ impl NodeHandler for ForkNode {
             while let Some(task_result) = tasks.next().await {
                 match task_result {
                     Ok((idx, Ok(ret_ctx))) => {
+                        // Only write prefixed variables to avoid branch-to-branch overwrites.
+                        // Each branch's variables are namespaced as fork_branch_{idx}_{key}.
                         for (key, value) in &ret_ctx.variables {
                             ctx.set_var(&format!("fork_branch_{}_{}", idx, key), value.clone());
-                            ctx.set_var(key, value.clone());
                         }
                         branch_results
                             .push(serde_json::to_value(&ret_ctx.variables).unwrap_or_default());
@@ -128,6 +140,14 @@ impl NodeHandler for ForkNode {
         }
         // ── Legacy single-node branches ─────────────────────────
         else if !cfg.branches.is_empty() {
+            if cfg.branches.len() > MAX_CONCURRENT_BRANCHES {
+                return Err(AppError::Validation(format!(
+                    "fork: too many branches ({}), maximum is {}",
+                    cfg.branches.len(),
+                    MAX_CONCURRENT_BRANCHES
+                )));
+            }
+
             let registry = engine.node_registry();
             let mut tasks = FuturesUnordered::new();
 
@@ -154,10 +174,9 @@ impl NodeHandler for ForkNode {
             while let Some(task_result) = tasks.next().await {
                 match task_result {
                     Ok(Ok((idx, node_id, branch_ctx))) => {
+                        // Only write prefixed variables
                         for (key, value) in &branch_ctx.variables {
-                            let prefixed = format!("fork_branch_{}_{}", idx, key);
-                            ctx.set_var(&prefixed, value.clone());
-                            ctx.set_var(key, value.clone());
+                            ctx.set_var(&format!("fork_branch_{}_{}", idx, key), value.clone());
                         }
                         ctx.set_var(
                             &format!("fork_branch_{}_output", idx),
@@ -222,6 +241,17 @@ impl NodeHandler for ForkNode {
             ));
         }
 
+        // Validate max branches
+        let branch_count = segments.map(|a| a.len()).unwrap_or(0);
+        let legacy_count = branches.map(|a| a.len()).unwrap_or(0);
+        let total = branch_count.max(legacy_count);
+        if total > MAX_CONCURRENT_BRANCHES {
+            return Err(AppError::Validation(format!(
+                "fork: too many branches ({}), maximum is {}",
+                total, MAX_CONCURRENT_BRANCHES
+            )));
+        }
+
         let join = config.get("join_at").and_then(|v| v.as_str()).unwrap_or("");
         if join.trim().is_empty() {
             return Err(AppError::Validation("join_at must not be empty".into()));
@@ -246,6 +276,16 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fork_rejects_too_many_branches() {
+        let node = ForkNode::new();
+        let segments: Vec<Value> = (0..11)
+            .map(|i| serde_json::json!({"start_id": format!("s{}", i), "end_id": format!("e{}", i)}))
+            .collect();
+        let result = node.validate_config(&serde_json::json!({"segments": segments, "join_at": "join1"}));
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
     async fn test_fork_legacy_branches() {
         let mut node_registry = NodeRegistry::new();
         node_registry.register(Arc::new(StartNode));
@@ -254,6 +294,7 @@ mod tests {
         let engine = Arc::new(RuleEngine::new(
             Arc::new(node_registry),
             Arc::new(interceptor_registry),
+            crate::engine::EngineConfig::default(),
         ));
 
         let node = ForkNode::new();

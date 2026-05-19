@@ -1,7 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import Button from '../../components/common/Button';
+import Spinner from '../../components/common/Spinner';
 import Modal from '../../components/common/Modal';
 import ConfirmDialog from '../../components/common/ConfirmDialog';
+import { showError, showSuccess } from '../../utils/toast';
 import * as modelsApi from '../../api/models';
 import type {
   LlmProvider,
@@ -36,11 +38,13 @@ export default function ModelManagementPage() {
   const [providerModal, setProviderModal] = useState(false);
   const [editingProvider, setEditingProvider] = useState<LlmProvider | null>(null);
   const [providerForm, setProviderForm] = useState<CreateProviderRequest>({ ...EMPTY_PROVIDER });
+  const [providerNameError, setProviderNameError] = useState<string | null>(null);
 
   const [modelModal, setModelModal] = useState(false);
   const [modelProviderId, setModelProviderId] = useState('');
   const [editingModel, setEditingModel] = useState<LlmModel | null>(null);
   const [modelForm, setModelForm] = useState<AddModelRequest>({ ...EMPTY_MODEL });
+  const [modelNameError, setModelNameError] = useState<string | null>(null);
 
   const [deleteTarget, setDeleteTarget] = useState<
     { kind: 'provider'; id: string; name: string } | { kind: 'model'; id: string; name: string } | null
@@ -52,7 +56,7 @@ export default function ModelManagementPage() {
       const res = await modelsApi.listProviders();
       setProviders(res.providers);
     } catch {
-      /* ignore */
+      showError('加载模型列表失败');
     }
     setLoading(false);
   }, []);
@@ -73,13 +77,14 @@ export default function ModelManagementPage() {
         prev.map((p) => (p.id === id ? { ...p, models: detail.models } : p)),
       );
     } catch {
-      /* ignore */
+      showError('加载 Provider 详情失败');
     }
   };
 
   const openNewProvider = () => {
     setEditingProvider(null);
     setProviderForm({ ...EMPTY_PROVIDER });
+    setProviderNameError(null);
     setProviderModal(true);
   };
 
@@ -92,41 +97,53 @@ export default function ModelManagementPage() {
       api_key: p.api_key,
       is_default: p.is_default,
     });
+    setProviderNameError(null);
     setProviderModal(true);
   };
 
   const saveProvider = async () => {
-    if (!providerForm.name.trim()) return;
-    if (editingProvider) {
-      const data: UpdateProviderRequest = {};
-      if (providerForm.name !== editingProvider.name) data.name = providerForm.name;
-      if (providerForm.provider_type !== editingProvider.provider_type)
-        data.provider_type = providerForm.provider_type;
-      if ((providerForm.base_url ?? '') !== (editingProvider.base_url ?? ''))
-        data.base_url = providerForm.base_url || '';
-      if (providerForm.api_key !== editingProvider.api_key)
-        data.api_key = providerForm.api_key;
-      if (providerForm.is_default !== editingProvider.is_default)
-        data.is_default = providerForm.is_default;
-      await modelsApi.updateProvider(editingProvider.id, data);
-    } else {
-      await modelsApi.createProvider(providerForm);
+    if (!providerForm.name.trim()) {
+      setProviderNameError('名称不能为空');
+      return;
     }
-    setProviderModal(false);
-    loadProviders();
+    setProviderNameError(null);
+    try {
+      if (editingProvider) {
+        const data: UpdateProviderRequest = {};
+        if (providerForm.name !== editingProvider.name) data.name = providerForm.name;
+        if (providerForm.provider_type !== editingProvider.provider_type)
+          data.provider_type = providerForm.provider_type;
+        if ((providerForm.base_url ?? '') !== (editingProvider.base_url ?? ''))
+          data.base_url = providerForm.base_url || '';
+        if (providerForm.api_key !== editingProvider.api_key)
+          data.api_key = providerForm.api_key;
+        if (providerForm.is_default !== editingProvider.is_default)
+          data.is_default = providerForm.is_default;
+        await modelsApi.updateProvider(editingProvider.id, data);
+      } else {
+        await modelsApi.createProvider(providerForm);
+      }
+      showSuccess('保存成功');
+      setProviderModal(false);
+      loadProviders();
+    } catch {
+      showError('保存失败');
+    }
   };
 
   const confirmDelete = () => {
     if (!deleteTarget) return;
     if (deleteTarget.kind === 'provider') {
       modelsApi.deleteProvider(deleteTarget.id).then(() => {
+        showSuccess('删除成功');
         if (expandedId === deleteTarget.id) setExpandedId(null);
         loadProviders();
-      });
+      }).catch(() => showError('删除失败'));
     } else {
       modelsApi.deleteModel(deleteTarget.id).then(() => {
+        showSuccess('删除成功');
         if (expandedId) handleExpand(expandedId);
-      });
+      }).catch(() => showError('删除失败'));
     }
     setDeleteTarget(null);
   };
@@ -135,6 +152,7 @@ export default function ModelManagementPage() {
     setEditingModel(null);
     setModelProviderId(providerId);
     setModelForm({ ...EMPTY_MODEL });
+    setModelNameError(null);
     setModelModal(true);
   };
 
@@ -148,29 +166,39 @@ export default function ModelManagementPage() {
       temperature: m.temperature,
       is_default: m.is_default,
     });
+    setModelNameError(null);
     setModelModal(true);
   };
 
   const saveModel = async () => {
-    if (!modelForm.model_name.trim()) return;
-    if (editingModel) {
-      const data: UpdateModelRequest = {};
-      if (modelForm.model_name !== editingModel.model_name)
-        data.model_name = modelForm.model_name;
-      if ((modelForm.display_name ?? '') !== (editingModel.display_name ?? ''))
-        data.display_name = modelForm.display_name || '';
-      if (modelForm.max_tokens !== editingModel.max_tokens)
-        data.max_tokens = modelForm.max_tokens;
-      if (modelForm.temperature !== editingModel.temperature)
-        data.temperature = modelForm.temperature;
-      if (modelForm.is_default !== editingModel.is_default)
-        data.is_default = modelForm.is_default;
-      await modelsApi.updateModel(editingModel.id, data);
-    } else {
-      await modelsApi.addModel(modelProviderId, modelForm);
+    if (!modelForm.model_name.trim()) {
+      setModelNameError('模型名称不能为空');
+      return;
     }
-    setModelModal(false);
-    if (expandedId) handleExpand(expandedId);
+    setModelNameError(null);
+    try {
+      if (editingModel) {
+        const data: UpdateModelRequest = {};
+        if (modelForm.model_name !== editingModel.model_name)
+          data.model_name = modelForm.model_name;
+        if ((modelForm.display_name ?? '') !== (editingModel.display_name ?? ''))
+          data.display_name = modelForm.display_name || '';
+        if (modelForm.max_tokens !== editingModel.max_tokens)
+          data.max_tokens = modelForm.max_tokens;
+        if (modelForm.temperature !== editingModel.temperature)
+          data.temperature = modelForm.temperature;
+        if (modelForm.is_default !== editingModel.is_default)
+          data.is_default = modelForm.is_default;
+        await modelsApi.updateModel(editingModel.id, data);
+      } else {
+        await modelsApi.addModel(modelProviderId, modelForm);
+      }
+      showSuccess('保存成功');
+      setModelModal(false);
+      if (expandedId) handleExpand(expandedId);
+    } catch {
+      showError('保存失败');
+    }
   };
 
   return (
@@ -181,7 +209,9 @@ export default function ModelManagementPage() {
       </div>
 
       {loading ? (
-        <div className="text-center text-gray-400 py-12">加载中...</div>
+        <div className="flex items-center justify-center py-16">
+          <Spinner className="h-8 w-8" />
+        </div>
       ) : providers.length === 0 ? (
         <div className="card text-center text-gray-400 py-12">
           尚未配置 LLM Provider，请点击上方按钮添加。
@@ -194,6 +224,8 @@ export default function ModelManagementPage() {
                 <button
                   className="flex-1 text-left flex items-center gap-3"
                   onClick={() => handleExpand(p.id)}
+                  aria-expanded={expandedId === p.id}
+                  aria-label={`展开 ${p.name}`}
                 >
                   <span className="text-xs text-gray-400">
                     {expandedId === p.id ? '▼' : '▶'}
@@ -299,7 +331,6 @@ export default function ModelManagementPage() {
         </div>
       )}
 
-      {/* Provider 弹窗 */}
       <Modal
         open={providerModal}
         onClose={() => setProviderModal(false)}
@@ -307,19 +338,24 @@ export default function ModelManagementPage() {
       >
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">名称</label>
+            <label htmlFor="provider-name" className="block text-sm font-medium text-gray-700 mb-1">名称</label>
             <input
-              className="input-field"
+              id="provider-name"
+              className={`input-field ${providerNameError ? 'border-red-400' : ''}`}
               value={providerForm.name}
-              onChange={(e) =>
-                setProviderForm({ ...providerForm, name: e.target.value })
-              }
+              onChange={(e) => {
+                setProviderForm({ ...providerForm, name: e.target.value });
+                if (providerNameError) setProviderNameError(null);
+              }}
               placeholder="例如：Anthropic、OpenAI"
+              aria-invalid={!!providerNameError}
             />
+            {providerNameError && <p className="text-sm text-red-600 mt-1">{providerNameError}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">类型</label>
+            <label htmlFor="provider-type" className="block text-sm font-medium text-gray-700 mb-1">类型</label>
             <select
+              id="provider-type"
               className="input-field"
               value={providerForm.provider_type}
               onChange={(e) =>
@@ -331,10 +367,11 @@ export default function ModelManagementPage() {
             </select>
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="provider-url" className="block text-sm font-medium text-gray-700 mb-1">
               接口地址 <span className="text-gray-400 font-normal">(可选)</span>
             </label>
             <input
+              id="provider-url"
               className="input-field"
               value={providerForm.base_url ?? ''}
               onChange={(e) =>
@@ -344,8 +381,9 @@ export default function ModelManagementPage() {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
+            <label htmlFor="provider-key" className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
             <input
+              id="provider-key"
               className="input-field"
               type="password"
               value={providerForm.api_key ?? ''}
@@ -372,7 +410,6 @@ export default function ModelManagementPage() {
         </div>
       </Modal>
 
-      {/* 模型弹窗 */}
       <Modal
         open={modelModal}
         onClose={() => setModelModal(false)}
@@ -380,21 +417,26 @@ export default function ModelManagementPage() {
       >
         <div className="space-y-3">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">模型名称</label>
+            <label htmlFor="model-name" className="block text-sm font-medium text-gray-700 mb-1">模型名称</label>
             <input
-              className="input-field"
+              id="model-name"
+              className={`input-field ${modelNameError ? 'border-red-400' : ''}`}
               value={modelForm.model_name}
-              onChange={(e) =>
-                setModelForm({ ...modelForm, model_name: e.target.value })
-              }
+              onChange={(e) => {
+                setModelForm({ ...modelForm, model_name: e.target.value });
+                if (modelNameError) setModelNameError(null);
+              }}
               placeholder="例如：claude-sonnet-4-6、gpt-4o"
+              aria-invalid={!!modelNameError}
             />
+            {modelNameError && <p className="text-sm text-red-600 mt-1">{modelNameError}</p>}
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
+            <label htmlFor="model-display" className="block text-sm font-medium text-gray-700 mb-1">
               显示名称 <span className="text-gray-400 font-normal">(可选)</span>
             </label>
             <input
+              id="model-display"
               className="input-field"
               value={modelForm.display_name ?? ''}
               onChange={(e) =>
@@ -405,8 +447,9 @@ export default function ModelManagementPage() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">最大 Token</label>
+              <label htmlFor="model-tokens" className="block text-sm font-medium text-gray-700 mb-1">最大 Token</label>
               <input
+                id="model-tokens"
                 className="input-field"
                 type="number"
                 value={modelForm.max_tokens}
@@ -416,8 +459,9 @@ export default function ModelManagementPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">温度</label>
+              <label htmlFor="model-temp" className="block text-sm font-medium text-gray-700 mb-1">温度</label>
               <input
+                id="model-temp"
                 className="input-field"
                 type="number"
                 step="0.1"
@@ -447,7 +491,6 @@ export default function ModelManagementPage() {
         </div>
       </Modal>
 
-      {/* 删除确认 */}
       <ConfirmDialog
         open={deleteTarget !== null}
         onClose={() => setDeleteTarget(null)}

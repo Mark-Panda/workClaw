@@ -22,16 +22,48 @@ impl std::fmt::Display for AgentStatus {
 #[serde(rename_all = "lowercase")]
 pub enum RuleStatus {
     Draft,
-    Active,
+    Enabled,
+    Disabled,
     Archived,
+}
+
+impl RuleStatus {
+    pub fn is_executable(&self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+
+    pub fn can_transition_to(&self, target: &RuleStatus) -> bool {
+        match (self, target) {
+            (Self::Draft, Self::Enabled) => true,
+            (Self::Enabled, Self::Disabled) => true,
+            (Self::Disabled, Self::Enabled) => true,
+            (Self::Enabled | Self::Disabled, Self::Archived) => true,
+            (Self::Archived, Self::Draft) => true,
+            _ => false,
+        }
+    }
 }
 
 impl std::fmt::Display for RuleStatus {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RuleStatus::Draft => write!(f, "draft"),
-            RuleStatus::Active => write!(f, "active"),
+            RuleStatus::Enabled => write!(f, "enabled"),
+            RuleStatus::Disabled => write!(f, "disabled"),
             RuleStatus::Archived => write!(f, "archived"),
+        }
+    }
+}
+
+impl std::str::FromStr for RuleStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "draft" => Ok(Self::Draft),
+            "enabled" | "active" => Ok(Self::Enabled),
+            "disabled" => Ok(Self::Disabled),
+            "archived" => Ok(Self::Archived),
+            other => Err(format!("Invalid rule status: {}", other)),
         }
     }
 }

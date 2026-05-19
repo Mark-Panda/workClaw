@@ -1,8 +1,24 @@
 import client from './client';
 import type { RuleChain, RuleChainDsl } from '../types/rule';
 
-export async function listRules(): Promise<{ rules: RuleChain[] }> {
-  const res = await client.get('/rules');
+export interface ListRulesParams {
+  page?: number;
+  page_size?: number;
+}
+
+export interface ListRulesResponse {
+  rules: RuleChain[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export async function listRules(params?: ListRulesParams): Promise<ListRulesResponse> {
+  const res = await client.get('/rules', { params });
+  // Backward compat: if response is array-shaped, wrap it
+  if (Array.isArray(res.data)) {
+    return { rules: res.data, total: res.data.length, page: 1, page_size: res.data.length };
+  }
   return res.data;
 }
 
@@ -32,5 +48,10 @@ export async function executeRule(id: string, input: unknown): Promise<{ status:
 
 export async function validateRule(dsl: RuleChainDsl): Promise<{ valid: boolean; warnings: string[] }> {
   const res = await client.post('/rules/validate', { dsl });
+  return res.data;
+}
+
+export async function toggleRule(id: string, enabled: boolean): Promise<{ id: string; status: string }> {
+  const res = await client.post(`/rules/${id}/toggle`, { enabled });
   return res.data;
 }

@@ -18,7 +18,7 @@ export default function Sidebar() {
       <div className="h-14 flex items-center px-4 border-b border-gray-100">
         <span className="font-bold text-lg text-primary-700">workClaw</span>
       </div>
-      <nav className="flex-1 p-3 space-y-1" role="navigation">
+      <nav className="flex-1 p-3 space-y-1" role="navigation" aria-label="主导航">
         {links.map((link) => (
           <NavLink
             key={link.to}
@@ -26,8 +26,9 @@ export default function Sidebar() {
             className={({ isActive }) =>
               `sidebar-link ${isActive ? 'active' : ''}`
             }
+            aria-label={link.label}
           >
-            <span className="w-5 text-center">{link.icon}</span>
+            <span className="w-5 text-center" aria-hidden="true">{link.icon}</span>
             {link.label}
           </NavLink>
         ))}

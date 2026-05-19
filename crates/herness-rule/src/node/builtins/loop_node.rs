@@ -169,6 +169,7 @@ mod tests {
         let engine = Arc::new(RuleEngine::new(
             Arc::new(node_registry),
             Arc::new(interceptor_registry),
+            crate::engine::EngineConfig::default(),
         ));
 
         let chain = crate::dsl::types::RuleChain {
@@ -229,6 +230,7 @@ mod tests {
         let engine = Arc::new(RuleEngine::new(
             Arc::new(node_registry),
             Arc::new(interceptor_registry),
+            crate::engine::EngineConfig::default(),
         ));
 
         let chain = crate::dsl::types::RuleChain {

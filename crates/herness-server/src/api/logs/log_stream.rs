@@ -8,8 +8,9 @@ pub async fn stream_logs() -> Sse<impl futures::Stream<Item = Result<Event, Infa
         Duration::from_secs(5),
     ))
     .map(|_| -> Result<Event, Infallible> {
+        let now = chrono::Utc::now().to_rfc3339();
         Ok(Event::default()
-            .data(r#"{"message": "heartbeat", "timestamp": ""}"#)
+            .data(serde_json::json!({"message": "heartbeat", "timestamp": now}).to_string())
             .event("log"))
     });
 
